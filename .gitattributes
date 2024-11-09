@@ -1,0 +1,2 @@
+# Mark all files as auto-detect text with line ending normalization
+* text=auto eol=lf

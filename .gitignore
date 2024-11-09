@@ -1,0 +1,10 @@
+# IDE Folders
+.vs/
+.vscode/
+
+# Build folders
+[Bb]uild/
+[Oo]ut/
+
+# Misc. folders
+docs/

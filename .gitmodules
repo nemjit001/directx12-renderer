@@ -1,0 +1,9 @@
+[submodule "vendored/SDL"]
+	path = vendored/SDL
+	url = https://github.com/libsdl-org/SDL
+[submodule "vendored/DirectX-Headers"]
+	path = vendored/DirectX-Headers
+	url = https://github.com/microsoft/DirectX-Headers.git
+[submodule "vendored/glm"]
+	path = vendored/glm
+	url = https://github.com/g-truc/glm.git
