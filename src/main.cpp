@@ -52,6 +52,7 @@ namespace Engine
     constexpr DXGI_GPU_PREFERENCE GPUPreference = DXGI_GPU_PREFERENCE_UNSPECIFIED;
     constexpr DXGI_FORMAT SwapColorFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
     constexpr DXGI_FORMAT SwapColorSRGBFormat = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+    constexpr DXGI_FORMAT SwapDepthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
     constexpr uint32_t FrameCount = 3;
 
     bool isRunning = true;
@@ -64,12 +65,15 @@ namespace Engine
 
     ComPtr<ID3D12CommandQueue> commandQueue;
     uint32_t rtvHeapIncrementSize = 0;
+    uint32_t dsvHeapIncrementSize = 0;
     uint32_t cbvHeapIncrementSize = 0; //< also for SRVs & UAVs
 
     BOOL tearingSupport = FALSE;
     ComPtr<IDXGISwapChain4> swapchain;
     ComPtr<ID3D12Resource> renderTargets[FrameCount];
-    ComPtr<ID3D12DescriptorHeap> rtvHeap;
+    ComPtr<ID3D12Resource> depthStencilTarget;
+    ComPtr<ID3D12DescriptorHeap> rtvHeap; //< for swap rtvs
+    ComPtr<ID3D12DescriptorHeap> dsvHeap; //< for swap dsv(s)
 
     ComPtr<ID3D12CommandAllocator> commandAllocator;
     ComPtr<ID3D12GraphicsCommandList> commandList;
@@ -175,6 +179,7 @@ namespace Engine
                 if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), MinFeatureLevel, __uuidof(ID3D12Device), nullptr)))
                 {
                     dxgiAdapter = adapter;
+                    printf("Automagically selected adapter: %ls\n", desc.Description);
                     break;
                 }
             }
@@ -207,6 +212,7 @@ namespace Engine
 
         // Get descriptor increment sizes
         rtvHeapIncrementSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        dsvHeapIncrementSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
         cbvHeapIncrementSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
         // Create swap chain
@@ -265,6 +271,19 @@ namespace Engine
             return false;
         }
 
+        // Create descriptor heap for swap DSVs
+        D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc{};
+        dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+        dsvHeapDesc.NumDescriptors = 1;
+        dsvHeapDesc.NodeMask = 0x00;
+
+        if (FAILED(device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&dsvHeap))))
+        {
+            printf("D3D12 dsv heap create failed\n");
+            return false;
+        }
+
         // Create frame resources
         CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rtvHeap->GetCPUDescriptorHandleForHeapStart());
         for (uint32_t frameIdx = 0; frameIdx < FrameCount; frameIdx++)
@@ -284,6 +303,23 @@ namespace Engine
             device->CreateRenderTargetView(renderTargets[frameIdx].Get(), &rtvDesc, rtvHandle);
             rtvHandle.Offset(1, rtvHeapIncrementSize);
         }
+
+        D3D12_HEAP_PROPERTIES defaultHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        D3D12_RESOURCE_DESC depthStencilDesc = CD3DX12_RESOURCE_DESC::Tex2D(SwapDepthStencilFormat, DefaultWindowWidth, DefaultWindowHeight, 1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+        D3D12_CLEAR_VALUE depthStencilClearValue = CD3DX12_CLEAR_VALUE(SwapDepthStencilFormat, 1.0F, 0x00);
+        if (FAILED(device->CreateCommittedResource(&defaultHeapProps, D3D12_HEAP_FLAG_NONE, &depthStencilDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthStencilClearValue, IID_PPV_ARGS(&depthStencilTarget))))
+        {
+            printf("D3D12 create swap depth buffer failed\n");
+            return false;
+        }
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+        dsvDesc.Format = SwapDepthStencilFormat;
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        dsvDesc.Texture2D.MipSlice = 0;
+
+        CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(dsvHeap->GetCPUDescriptorHandleForHeapStart());
+        device->CreateDepthStencilView(depthStencilTarget.Get(), &dsvDesc, dsvHandle);
 
         // Create command allocator & command list
         if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator))))
@@ -387,15 +423,21 @@ namespace Engine
         graphicsPipelineDesc.RasterizerState.AntialiasedLineEnable = FALSE;
         graphicsPipelineDesc.RasterizerState.ForcedSampleCount = 0;
         graphicsPipelineDesc.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
-        graphicsPipelineDesc.DepthStencilState.DepthEnable = FALSE;
+        graphicsPipelineDesc.DepthStencilState.DepthEnable = TRUE;
+        graphicsPipelineDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        graphicsPipelineDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
         graphicsPipelineDesc.DepthStencilState.StencilEnable = FALSE;
+        graphicsPipelineDesc.DepthStencilState.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+        graphicsPipelineDesc.DepthStencilState.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+        graphicsPipelineDesc.DepthStencilState.FrontFace = D3D12_DEPTH_STENCILOP_DESC{ D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP, D3D12_COMPARISON_FUNC_ALWAYS };
+        graphicsPipelineDesc.DepthStencilState.BackFace = D3D12_DEPTH_STENCILOP_DESC{ D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP, D3D12_COMPARISON_FUNC_ALWAYS };
         graphicsPipelineDesc.InputLayout.NumElements = sizeof_array(inputElements);
         graphicsPipelineDesc.InputLayout.pInputElementDescs = inputElements;
         graphicsPipelineDesc.IBStripCutValue = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
         graphicsPipelineDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         graphicsPipelineDesc.NumRenderTargets = 1;
         graphicsPipelineDesc.RTVFormats[0] = SwapColorSRGBFormat;
-        graphicsPipelineDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
+        graphicsPipelineDesc.DSVFormat = SwapDepthStencilFormat;
         graphicsPipelineDesc.SampleDesc.Count = 1;
         graphicsPipelineDesc.SampleDesc.Quality = 0;
         graphicsPipelineDesc.NodeMask = 0x00;
@@ -439,10 +481,10 @@ namespace Engine
 
         // Load mesh data
         Vertex const vertices[] = {
-            Vertex{ { -1.0F, -1.0F, 0.0F }, { 1.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 0.0F }, { 0.0F, 0.0F } },
-            Vertex{ { -1.0F,  1.0F, 0.0F }, { 0.0F, 1.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F } },
-            Vertex{ {  1.0F,  1.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 0.0F }, { 1.0F, 1.0F } },
-            Vertex{ {  1.0F, -1.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 0.0F }, { 1.0F, 0.0F } },
+            Vertex{ { -1.0F, -1.0F,  1.0F }, { 1.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 0.0F }, { 0.0F, 0.0F } },
+            Vertex{ { -1.0F,  1.0F,  1.0F }, { 0.0F, 1.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F } },
+            Vertex{ {  1.0F,  1.0F,  1.0F }, { 0.0F, 0.0F, 1.0F }, { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 0.0F }, { 1.0F, 1.0F } },
+            Vertex{ {  1.0F, -1.0F,  1.0F }, { 1.0F, 1.0F, 1.0F }, { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 0.0F }, { 1.0F, 0.0F } },
         };
 
         uint32_t const indices[] = {
@@ -589,8 +631,8 @@ namespace Engine
         }
 
         // Update render data
-        rotation += rotationSpeed * (frameTimer.deltaTimeMS() / 1'000.0);
-        sceneData.viewproject = glm::perspective(glm::radians(60.0F), (float)(screenWidth) / (float)(screenHeight), 0.01F, 10.0F)
+        rotation += rotationSpeed * static_cast<float>(frameTimer.deltaTimeMS() / 1'000.0);
+        sceneData.viewproject = glm::perspective(glm::radians(60.0F), (float)(screenWidth) / (float)(screenHeight), 0.1F, 10.0F)
             * glm::lookAt(glm::vec3(0.0F, 0.0F, 5.0F), glm::vec3(0.0F, 0.0F, 0.0F), glm::vec3(0.0F, 1.0F, 0.0F));
         sceneData.model = glm::rotate(glm::identity<glm::mat4>(), glm::radians(rotation), glm::vec3(0.0F, 1.0F, 0.0F));
         sceneData.normal = glm::mat4(glm::transpose(glm::inverse(glm::mat3(sceneData.model))));
@@ -630,9 +672,11 @@ namespace Engine
 
             // Get current swap RTV
             CD3DX12_CPU_DESCRIPTOR_HANDLE currentSwapRTV(rtvHeap->GetCPUDescriptorHandleForHeapStart(), backbufferIndex, rtvHeapIncrementSize);
+            CD3DX12_CPU_DESCRIPTOR_HANDLE currentSwapDSV(dsvHeap->GetCPUDescriptorHandleForHeapStart(), 0, dsvHeapIncrementSize);
             float const clearColor[] = { 0.1F, 0.1F, 0.1F, 0.1F };
-            commandList->OMSetRenderTargets(1, &currentSwapRTV, FALSE, nullptr);
+            commandList->OMSetRenderTargets(1, &currentSwapRTV, FALSE, &currentSwapDSV);
             commandList->ClearRenderTargetView(currentSwapRTV, clearColor, 0, nullptr);
+            commandList->ClearDepthStencilView(currentSwapDSV, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0F, 0x00, 0, nullptr);
 
             // Set used descriptor heaps for this frame
             ID3D12DescriptorHeap* ppDescriptorHeaps[] = { sceneDataCBVHeap.Get() };
