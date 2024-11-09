@@ -82,16 +82,18 @@ namespace Engine
     HANDLE fenceEvent = nullptr;
     uint64_t fenceValue = 0;
 
+    // Per pass data
     ComPtr<ID3D12RootSignature> rootSignature; //< determines shader bind points
     ComPtr<ID3D12PipelineState> graphicsPipeline; //< determines pipeline stages & programming
-
     D3D12_VIEWPORT viewport;
     D3D12_RECT scissor;
 
+    // Per scene data
     ComPtr<ID3D12DescriptorHeap> sceneDataCBVHeap;
     ComPtr<ID3D12Resource> sceneDataBuffer;
     D3D12_CONSTANT_BUFFER_VIEW_DESC sceneDataBufferView;
 
+    // Per mesh data
     uint32_t vertexCount = 0;
     uint32_t indexCount = 0;
     ComPtr<ID3D12Resource> vertexBuffer;
