@@ -43,10 +43,10 @@ namespace Engine
     {
         uint32_t vertexCount = 0;
         uint32_t indexCount = 0;
-        ComPtr<ID3D12Resource> vertexBuffer;
-        ComPtr<ID3D12Resource> indexBuffer;
-        D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
-        D3D12_INDEX_BUFFER_VIEW indexBufferView;
+        ComPtr<ID3D12Resource> vertexBuffer = nullptr;
+        ComPtr<ID3D12Resource> indexBuffer = nullptr;
+        D3D12_VERTEX_BUFFER_VIEW vertexBufferView = {};
+        D3D12_INDEX_BUFFER_VIEW indexBufferView = {};
     };
 
     /// @brief Scene constant buffer data.
@@ -137,6 +137,11 @@ namespace Engine
 
         bool createMesh(Mesh& mesh, Vertex* pVertices, uint32_t vertexCount, uint32_t* pIndices, uint32_t indexCount)
         {
+            assert(pVertices != nullptr);
+            assert(pIndices != nullptr);
+            assert(vertexCount > 0);
+            assert(indexCount > 0);
+
             mesh = Mesh{};
             mesh.vertexCount = vertexCount;
             mesh.indexCount = indexCount;
@@ -674,7 +679,7 @@ namespace Engine
             2, 3, 0
         };
 
-        if (!D3D12Helpers::createMesh(mesh, verts.data(), verts.size(), idxs.data(), idxs.size()))
+        if (!D3D12Helpers::createMesh(mesh, verts.data(), (uint32_t)verts.size(), idxs.data(), (uint32_t)idxs.size()))
         {
             printf("Mesh create failed\n");
             return false;
