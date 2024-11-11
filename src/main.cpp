@@ -76,6 +76,8 @@ namespace Engine
     /// @brief Scene constant buffer data.
     struct alignas(256) SceneData
     {
+        alignas(4) float azimuth;
+        alignas(4) float zenith;
         alignas(4) glm::vec3 cameraPosition;
         alignas(16) glm::mat4 viewproject;
         alignas(16) glm::mat4 model;
@@ -641,7 +643,7 @@ namespace Engine
         textureDataDescriptorRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
 
         CD3DX12_ROOT_PARAMETER1 sceneDataParam;
-        sceneDataParam.InitAsDescriptorTable(1, &sceneDataDescriptorRange, D3D12_SHADER_VISIBILITY_VERTEX);
+        sceneDataParam.InitAsDescriptorTable(1, &sceneDataDescriptorRange, D3D12_SHADER_VISIBILITY_ALL);
 
         CD3DX12_ROOT_PARAMETER1 textureDataParam;
         textureDataParam.InitAsDescriptorTable(1, &textureDataDescriptorRange, D3D12_SHADER_VISIBILITY_PIXEL);
@@ -960,9 +962,12 @@ namespace Engine
 
         if (ImGui::Begin("DX12 Renderer Config"))
         {
-            ImGui::SeparatorText("Stats");
+            ImGui::SeparatorText("Statistics");
             ImGui::Text("Frame time: %10.2f ms", frameTimer.deltaTimeMS());
             ImGui::Text("FPS:        %10.2f fps", 1'000.0 / frameTimer.deltaTimeMS());
+            ImGui::SeparatorText("Scene");
+            ImGui::DragFloat("Sun Azimuth", &sceneData.azimuth, 1.0F, 0.0F, 360.0F);
+            ImGui::DragFloat("Sun Zenith", &sceneData.zenith, 1.0F, -90.0F, 90.0F);
         }
         ImGui::End();
 
