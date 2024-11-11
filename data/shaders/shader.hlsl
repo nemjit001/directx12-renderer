@@ -23,6 +23,7 @@ cbuffer SceneData : register(b0)
 };
 
 Texture2D colorTexture : register(t0);
+Texture2D normalTexture : register(t1);
 SamplerState textureSampler : register(s0);
 
 PSInput VSForward(VSInput input)
@@ -44,7 +45,7 @@ PSInput VSForward(VSInput input)
 float4 PSForward(PSInput input) : SV_TARGET0
 {
     float3 color = pow(colorTexture.Sample(textureSampler, input.texCoord).rgb, 2.2); // Convert from SRGB to linear colors    
-    float3 normal = float3(0., 0., 1.);
+    float3 normal = pow(normalTexture.Sample(textureSampler, input.texCoord).rgb, 2.2); // Convert from SRGB to linear colors;
     
     float3 N = mul(input.TBN, normal);
     return float4(color, 1.0);

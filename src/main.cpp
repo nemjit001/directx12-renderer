@@ -93,7 +93,7 @@ namespace Engine
     ComPtr<ID3D12DescriptorHeap> descriptorResourceHeap;
     ComPtr<ID3D12Resource> sceneDataBuffer;
 
-    // Per mesh data
+    // Mesh data
     uint32_t vertexCount = 0;
     uint32_t indexCount = 0;
     ComPtr<ID3D12Resource> vertexBuffer;
@@ -101,8 +101,9 @@ namespace Engine
     ComPtr<ID3D12Resource> indexBuffer;
     D3D12_INDEX_BUFFER_VIEW indexBufferView;
 
-    // Per material data
+    // Material data
     ComPtr<ID3D12Resource> colorTexture;
+    ComPtr<ID3D12Resource> normalTexture;
 
     // CPU side renderer data
     SceneData sceneData = SceneData{};
@@ -126,6 +127,76 @@ namespace Engine
             }
 
             value++;
+        }
+
+        bool loadTexture(char const* path, ID3D12Resource** ppResource)
+        {
+            assert(path != nullptr);
+            assert(ppResource != nullptr);
+
+            int texWidth = 0;
+            int texHeight = 0;
+            int texChannels = 0;
+            stbi_uc* pTextureData = stbi_load(path, &texWidth, &texHeight, &texChannels, 4); // XXX: assumes 4 channels always, is this OK?
+            if (pTextureData == nullptr)
+            {
+                printf("STB Image texture load failed [%s]\n", path);
+                return false;
+            }
+            printf("Loaded texture [%s] (%d x %d x %d)\n", path, texWidth, texHeight, texChannels);
+
+            D3D12_RESOURCE_DESC textureDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R8G8B8A8_UNORM, texWidth, texHeight, 1, 1);
+            if (FAILED(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), D3D12_HEAP_FLAG_NONE, &textureDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(ppResource))))
+            {
+                printf("D3D12 texture create failed\n");
+                stbi_image_free(pTextureData);
+                return false;
+            }
+
+            uint64_t uploadBufferSize = GetRequiredIntermediateSize(*ppResource, 0, 1);
+            ComPtr<ID3D12Resource> uploadBuffer;
+            D3D12_RESOURCE_DESC uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+            if (FAILED(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE, &uploadBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer))))
+            {
+                printf("D3D12 texture upload buffer create failed\n");
+                stbi_image_free(pTextureData);
+                return false;
+            }
+
+            // Perform upload using transient commandlist
+            {
+                ComPtr<ID3D12GraphicsCommandList> uploadCommandList;
+                if (FAILED(device->CreateCommandList(0x00, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.Get(), nullptr, IID_PPV_ARGS(&uploadCommandList))))
+                {
+                    printf("D3D12 upload command list create failed\n");
+                    stbi_image_free(pTextureData);
+                    return false;
+                }
+
+                D3D12_SUBRESOURCE_DATA textureResourceData{};
+                textureResourceData.pData = pTextureData;
+                textureResourceData.RowPitch = texWidth * 4;
+                textureResourceData.SlicePitch = texWidth * texHeight * 4;
+
+                UpdateSubresources(uploadCommandList.Get(), *ppResource, uploadBuffer.Get(), 0, 0, 1, &textureResourceData);
+
+                D3D12_RESOURCE_BARRIER textureUploadBarrier = CD3DX12_RESOURCE_BARRIER::Transition(*ppResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                uploadCommandList->ResourceBarrier(1, &textureUploadBarrier);
+                
+                if (FAILED(uploadCommandList->Close()))
+                {
+                    printf("D3D12 upload command list close failed\n");
+                    stbi_image_free(pTextureData);
+                    return false;
+                }
+
+                ID3D12CommandList* ppUploadCommandLists[] = { uploadCommandList.Get() };
+                commandQueue->ExecuteCommandLists(1, ppUploadCommandLists);
+                D3D12Helpers::waitForGPU(commandQueue.Get(), fenceEvent, fenceValue);
+            }
+
+            stbi_image_free(pTextureData);
+            return true;
         }
     } // namespace D3D12Helpers
 
@@ -151,13 +222,16 @@ namespace Engine
 
         // Create DXGI factory
         uint32_t factoryFlags = 0;
+#ifndef NDEBUG
         ComPtr<ID3D12Debug1> debug;
         if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))))
         {
             factoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
             debug->EnableDebugLayer();
             debug->SetEnableGPUBasedValidation(TRUE);
+            debug->SetEnableSynchronizedCommandQueueValidation(TRUE);
         }
+#endif
 
         if (FAILED(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&dxgiFactory))))
         {
@@ -367,12 +441,12 @@ namespace Engine
             return false;
         }
 
-        // Create root signature
+        // Create root signature for graphics pipeline
         CD3DX12_DESCRIPTOR_RANGE1 sceneDataDescriptorRange;
         sceneDataDescriptorRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
 
         CD3DX12_DESCRIPTOR_RANGE1 textureDataDescriptorRange;
-        textureDataDescriptorRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+        textureDataDescriptorRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
 
         CD3DX12_ROOT_PARAMETER1 sceneDataParam;
         sceneDataParam.InitAsDescriptorTable(1, &sceneDataDescriptorRange, D3D12_SHADER_VISIBILITY_VERTEX);
@@ -504,7 +578,7 @@ namespace Engine
         D3D12_DESCRIPTOR_HEAP_DESC descriptorResourceHeapDesc{};
         descriptorResourceHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         descriptorResourceHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        descriptorResourceHeapDesc.NumDescriptors = 2; // cbv + 1 texture
+        descriptorResourceHeapDesc.NumDescriptors = 3; // cbv + 2 textures
         descriptorResourceHeapDesc.NodeMask = 0x00;
 
         if (FAILED(device->CreateDescriptorHeap(&descriptorResourceHeapDesc, IID_PPV_ARGS(&descriptorResourceHeap))))
@@ -583,51 +657,17 @@ namespace Engine
         indexBuffer->Unmap(0, nullptr);
 
         // Load material data
-        int colorTextureWidth = 0, colorTextureHeight = 0;
-        stbi_uc* pColorTextureImageData = stbi_load("../data/assets/brickwall.jpg", &colorTextureWidth, &colorTextureHeight, nullptr, 4);
-        if (pColorTextureImageData == nullptr)
-        {
-            printf("STB Image texture load failed\n");
+        if (!D3D12Helpers::loadTexture("../data/assets/brickwall.jpg", &colorTexture)) {
+            printf("Color map load failed\n");
             return false;
         }
 
-        D3D12_RESOURCE_DESC colorTextureDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R8G8B8A8_UNORM, colorTextureWidth, colorTextureHeight, 1, 1);
-        if (FAILED(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), D3D12_HEAP_FLAG_NONE, &colorTextureDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&colorTexture))))
-        {
-            printf("D3D12 color texture create failed\n");
+        if (!D3D12Helpers::loadTexture("../data/assets/brickwall_normal.jpg", &normalTexture)) {
+            printf("Normal map load failed\n");
             return false;
         }
 
-        uint64_t uploadBufferSize = GetRequiredIntermediateSize(colorTexture.Get(), 0, 1);
-        ComPtr<ID3D12Resource> uploadBuffer;
-        D3D12_RESOURCE_DESC uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
-        if (FAILED(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE, &uploadBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer))))
-        {
-            printf("D3D12 color texture upload buffer create failed\n");
-            return false;
-        }
-
-        // Perform upload using transient commandlist
-        {
-            ComPtr<ID3D12GraphicsCommandList> uploadCommandList;
-            device->CreateCommandList(0x00, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.Get(), nullptr, IID_PPV_ARGS(&uploadCommandList));
-
-            D3D12_SUBRESOURCE_DATA colorTextureData{};
-            colorTextureData.pData = pColorTextureImageData;
-            colorTextureData.RowPitch = colorTextureWidth * 4;
-            colorTextureData.SlicePitch = colorTextureHeight * colorTextureWidth * 4;
-
-            UpdateSubresources(uploadCommandList.Get(), colorTexture.Get(), uploadBuffer.Get(), 0, 0, 1, &colorTextureData);
-
-            D3D12_RESOURCE_BARRIER colorTextureBarrier = CD3DX12_RESOURCE_BARRIER::Transition(colorTexture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            uploadCommandList->ResourceBarrier(1, &colorTextureBarrier);
-            uploadCommandList->Close();
-
-            ID3D12CommandList* ppUploadCommandLists[] = { uploadCommandList.Get()};
-            commandQueue->ExecuteCommandLists(1, ppUploadCommandLists);
-            D3D12Helpers::waitForGPU(commandQueue.Get(), fenceEvent, fenceValue);
-        }
-
+        // Create material SRVs
         D3D12_SHADER_RESOURCE_VIEW_DESC colorTextureViewDesc{};
         colorTextureViewDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         colorTextureViewDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -637,6 +677,16 @@ namespace Engine
         colorTextureViewDesc.Texture2D.PlaneSlice = 0;
         colorTextureViewDesc.Texture2D.ResourceMinLODClamp = 0.0F;
         device->CreateShaderResourceView(colorTexture.Get(), &colorTextureViewDesc, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 1, cbvHeapIncrementSize));
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC normalTextureViewDesc{};
+        normalTextureViewDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        normalTextureViewDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        normalTextureViewDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        normalTextureViewDesc.Texture2D.MostDetailedMip = 0;
+        normalTextureViewDesc.Texture2D.MipLevels = 1;
+        normalTextureViewDesc.Texture2D.PlaneSlice = 0;
+        normalTextureViewDesc.Texture2D.ResourceMinLODClamp = 0.0F;
+        device->CreateShaderResourceView(normalTexture.Get(), &normalTextureViewDesc, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 2, cbvHeapIncrementSize));
 
         D3D12Helpers::waitForGPU(commandQueue.Get(), fenceEvent, fenceValue); //< wait for GPU queue just to be sure all uploads are finished
         printf("Initialized Big Renderer\n");
