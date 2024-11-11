@@ -9,6 +9,9 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <imgui.h>
+#include <imgui_impl_sdl2.h>
+#include <imgui_impl_dx12.h>
 #include <SDL.h>
 #include <SDL_syswm.h>
 #include <stb_image.h>
@@ -77,6 +80,8 @@ namespace Engine
     ComPtr<IDXGIFactory6> dxgiFactory;
     ComPtr<IDXGIAdapter1> dxgiAdapter;
     ComPtr<ID3D12Device> device;
+
+    ComPtr<ID3D12DescriptorHeap> ImGuiSRVHeap; //< SRV heap specifically for ImGUI usage
 
     ComPtr<ID3D12CommandQueue> commandQueue;
     uint32_t rtvHeapIncrementSize = 0;
@@ -337,6 +342,13 @@ namespace Engine
 
     bool init()
     {
+        IMGUI_CHECKVERSION();
+
+        ImGui::CreateContext();
+        ImGui::StyleColorsDark();
+        ImGuiIO& io = ImGui::GetIO(); (void)(io);
+        io.IniFilename = nullptr;
+
         if (SDL_Init(SDL_INIT_VIDEO) != 0)
         {
             printf("SDL init failed: %s\n", SDL_GetError());
@@ -352,6 +364,12 @@ namespace Engine
         if (window == nullptr)
         {
             printf("SDL window create failed: %s\n", SDL_GetError());
+            return false;
+        }
+
+        if (!ImGui_ImplSDL2_InitForD3D(window))
+        {
+            printf("ImGui init for SDL2 failed\n");
             return false;
         }
 
@@ -440,6 +458,24 @@ namespace Engine
         if (FAILED(device->CreateCommandQueue(&commandQueueDesc, IID_PPV_ARGS(&commandQueue))))
         {
             printf("D3D12 command queue create failed\n");
+            return false;
+        }
+
+        // Init ImGui backend
+        D3D12_DESCRIPTOR_HEAP_DESC ImGuiSRVHeapDesc{};
+        ImGuiSRVHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        ImGuiSRVHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        ImGuiSRVHeapDesc.NumDescriptors = 1;
+        ImGuiSRVHeapDesc.NodeMask = 0x00;
+        if (FAILED(device->CreateDescriptorHeap(&ImGuiSRVHeapDesc, IID_PPV_ARGS(&ImGuiSRVHeap))))
+        {
+            printf("D3D12 ImGui SRV heap create failed\n");
+            return false;
+        }
+
+        if (!ImGui_ImplDX12_Init(device.Get(), 1, SwapColorSRGBFormat, ImGuiSRVHeap.Get(), ImGuiSRVHeap->GetCPUDescriptorHandleForHeapStart(), ImGuiSRVHeap->GetGPUDescriptorHandleForHeapStart()))
+        {
+            printf("ImGui init for D3D12 failed\n");
             return false;
         }
 
@@ -797,10 +833,14 @@ namespace Engine
         printf("Shutting down Big Renderer\n");
 
         D3D12Helpers::waitForGPU(commandQueue.Get(), fenceEvent, fenceValue);
+        ImGui_ImplDX12_Shutdown();
         CloseHandle(fenceEvent);
 
+        ImGui_ImplSDL2_Shutdown();
         SDL_DestroyWindow(window);
         SDL_Quit();
+
+        ImGui::DestroyContext();
     }
 
     void resize(uint32_t width, uint32_t height)
@@ -878,6 +918,8 @@ namespace Engine
         SDL_Event event{};
         while (SDL_PollEvent(&event) != 0)
         {
+            ImGui_ImplSDL2_ProcessEvent(&event);
+
             if (event.type == SDL_QUIT)
             {
                 printf("Exit requested\n");
@@ -895,6 +937,21 @@ namespace Engine
                 }
             }
         }
+
+        // Record GUI state
+        ImGui_ImplSDL2_NewFrame();
+        ImGui_ImplDX12_NewFrame();
+        ImGui::NewFrame();
+
+        if (ImGui::Begin("Big Renderer Config"))
+        {
+            ImGui::SeparatorText("Stats");
+            ImGui::Text("Frame time: %10.2f ms", frameTimer.deltaTimeMS());
+            ImGui::Text("FPS:        %10.2f fps", 1'000.0 / frameTimer.deltaTimeMS());
+        }
+        ImGui::End();
+
+        ImGui::Render();
 
         // Update render data
         sceneData.viewproject = glm::perspective(glm::radians(60.0F), (float)(viewport.Width) / (float)(viewport.Height), 0.1F, 10.0F)
@@ -963,6 +1020,11 @@ namespace Engine
             commandList->IASetVertexBuffers(0, sizeof_array(pVertexBuffers), pVertexBuffers);
             commandList->IASetIndexBuffer(&mesh.indexBufferView);
             commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
+
+            // Draw GUI
+            ID3D12DescriptorHeap* ppImGuiHeaps[] = { ImGuiSRVHeap.Get() };
+            commandList->SetDescriptorHeaps(sizeof_array(ppImGuiHeaps), ppImGuiHeaps);
+            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList.Get());
 
             // Transition to present state
             CD3DX12_RESOURCE_BARRIER swapPresentBarrier = CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[backbufferIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);

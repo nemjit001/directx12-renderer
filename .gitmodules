@@ -13,3 +13,6 @@
 [submodule "vendored/tinyobjloader"]
 	path = vendored/tinyobjloader
 	url = https://github.com/tinyobjloader/tinyobjloader
+[submodule "vendored/imgui"]
+	path = vendored/imgui
+	url = https://github.com/ocornut/imgui

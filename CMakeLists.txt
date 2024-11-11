@@ -20,10 +20,19 @@ add_subdirectory("vendored/tinyobjloader/")
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE "vendored/stb")
 
+# ImGUI project
+add_library(imgui STATIC "vendored/imgui/imgui.cpp" "vendored/imgui/imgui_demo.cpp" "vendored/imgui/imgui_draw.cpp"
+	"vendored/imgui/imgui_tables.cpp" "vendored/imgui/imgui_widgets.cpp"
+	"vendored/imgui/backends/imgui_impl_sdl2.cpp" # SDL2 hook
+	"vendored/imgui/backends/imgui_impl_dx12.cpp" # DirectX 12 hook
+)
+target_include_directories(imgui PUBLIC "vendored/imgui/" "vendored/imgui/backends/")
+target_link_libraries(imgui PUBLIC SDL2::SDL2)
+
 # Big Renderer project
 file(GLOB_RECURSE BIG_RENDERER_SOURCES CONFIGURE_DEPENDS "src/*.cpp" "src/*.hpp")
 add_executable(BigRenderer ${BIG_RENDERER_SOURCES})
-target_link_libraries(BigRenderer PRIVATE dxgi d3d12 d3dcompiler DirectX-Guids DirectX-Headers glm::glm SDL2::SDL2 stb tinyobjloader)
+target_link_libraries(BigRenderer PRIVATE dxgi d3d12 d3dcompiler DirectX-Guids DirectX-Headers glm::glm imgui SDL2::SDL2 stb tinyobjloader)
 # set_target_properties(BigRenderer PROPERTIES COMPILE_WARNING_AS_ERROR ON)
 
 if (MSVC)
