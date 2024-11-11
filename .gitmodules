@@ -7,3 +7,6 @@
 [submodule "vendored/glm"]
 	path = vendored/glm
 	url = https://github.com/g-truc/glm.git
+[submodule "vendored/stb"]
+	path = vendored/stb
+	url = https://github.com/nothings/stb

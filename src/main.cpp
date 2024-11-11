@@ -4,10 +4,12 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #define GLM_FORCE_RADIANS
 #define SDL_MAIN_HANDLED
+#define STB_IMAGE_IMPLEMENTATION
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <SDL.h>
 #include <SDL_syswm.h>
+#include <stb_image.h>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -49,7 +51,6 @@ namespace Engine
     constexpr uint32_t DefaultWindowHeight = 900;
 
     constexpr D3D_FEATURE_LEVEL MinFeatureLevel = D3D_FEATURE_LEVEL_11_0;
-    constexpr DXGI_GPU_PREFERENCE GPUPreference = DXGI_GPU_PREFERENCE_UNSPECIFIED;
     constexpr DXGI_FORMAT SwapColorFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
     constexpr DXGI_FORMAT SwapColorSRGBFormat = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
     constexpr DXGI_FORMAT SwapDepthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
@@ -89,9 +90,8 @@ namespace Engine
     D3D12_RECT scissor;
 
     // Per scene data
-    ComPtr<ID3D12DescriptorHeap> sceneDataCBVHeap;
+    ComPtr<ID3D12DescriptorHeap> descriptorResourceHeap;
     ComPtr<ID3D12Resource> sceneDataBuffer;
-    D3D12_CONSTANT_BUFFER_VIEW_DESC sceneDataBufferView;
 
     // Per mesh data
     uint32_t vertexCount = 0;
@@ -101,11 +101,10 @@ namespace Engine
     ComPtr<ID3D12Resource> indexBuffer;
     D3D12_INDEX_BUFFER_VIEW indexBufferView;
 
-    // CPU side renderer data (temp for spinny thing)
-    uint32_t screenWidth = DefaultWindowWidth;
-    uint32_t screenHeight = DefaultWindowHeight;
-    float rotationSpeed = 45.0F;
-    float rotation = 0.0F;
+    // Per material data
+    ComPtr<ID3D12Resource> colorTexture;
+
+    // CPU side renderer data
     SceneData sceneData = SceneData{};
 
     namespace D3D12Helpers
@@ -169,7 +168,7 @@ namespace Engine
         // auto select adapter
         {
             ComPtr<IDXGIAdapter1> adapter;
-            for (UINT adapterIdx = 0; SUCCEEDED(dxgiFactory->EnumAdapterByGpuPreference(adapterIdx, GPUPreference, IID_PPV_ARGS(&adapter))); adapterIdx++)
+            for (UINT adapterIdx = 0; SUCCEEDED(dxgiFactory->EnumAdapterByGpuPreference(adapterIdx, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter))); adapterIdx++)
             {
                 DXGI_ADAPTER_DESC1 desc{};
                 adapter->GetDesc1(&desc);
@@ -181,18 +180,41 @@ namespace Engine
                 if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), MinFeatureLevel, __uuidof(ID3D12Device), nullptr)))
                 {
                     dxgiAdapter = adapter;
-                    printf("Automagically selected adapter: %ls\n", desc.Description);
                     break;
                 }
+            }
+
+            if (dxgiAdapter == nullptr)
+            {
+                // No high performance adapter, search for other adapters
+                for (UINT adapterIdx = 0; SUCCEEDED(dxgiFactory->EnumAdapterByGpuPreference(adapterIdx, DXGI_GPU_PREFERENCE_UNSPECIFIED, IID_PPV_ARGS(&adapter))); adapterIdx++)
+                {
+                    DXGI_ADAPTER_DESC1 desc{};
+                    adapter->GetDesc1(&desc);
+
+                    if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
+                        continue;
+                    }
+
+                    if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), MinFeatureLevel, __uuidof(ID3D12Device), nullptr)))
+                    {
+                        dxgiAdapter = adapter;
+                        break;
+                    }
+                }
+            }
+
+            if (dxgiAdapter == nullptr)
+            {
+                printf("DXGI adapter select failed\n");
+                return false;
             }
         }
 
         // Create device & command queue
-        if (dxgiAdapter == nullptr)
-        {
-            printf("DXGI adapter select failed\n");
-            return false;
-        }
+        DXGI_ADAPTER_DESC1 adapterDesc{};
+        dxgiAdapter->GetDesc1(&adapterDesc);
+        printf("Automagically selected adapter: %ls\n", adapterDesc.Description);
 
         if (FAILED(D3D12CreateDevice(dxgiAdapter.Get(), MinFeatureLevel, IID_PPV_ARGS(&device))))
         {
@@ -306,10 +328,9 @@ namespace Engine
             rtvHandle.Offset(1, rtvHeapIncrementSize);
         }
 
-        D3D12_HEAP_PROPERTIES defaultHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
         D3D12_RESOURCE_DESC depthStencilDesc = CD3DX12_RESOURCE_DESC::Tex2D(SwapDepthStencilFormat, DefaultWindowWidth, DefaultWindowHeight, 1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
         D3D12_CLEAR_VALUE depthStencilClearValue = CD3DX12_CLEAR_VALUE(SwapDepthStencilFormat, 1.0F, 0x00);
-        if (FAILED(device->CreateCommittedResource(&defaultHeapProps, D3D12_HEAP_FLAG_NONE, &depthStencilDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthStencilClearValue, IID_PPV_ARGS(&depthStencilTarget))))
+        if (FAILED(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), D3D12_HEAP_FLAG_NONE, &depthStencilDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthStencilClearValue, IID_PPV_ARGS(&depthStencilTarget))))
         {
             printf("D3D12 create swap depth buffer failed\n");
             return false;
@@ -347,10 +368,35 @@ namespace Engine
         }
 
         // Create root signature
-        CD3DX12_DESCRIPTOR_RANGE1 cbvRange; cbvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
-        CD3DX12_ROOT_PARAMETER1 cbvScene; cbvScene.InitAsDescriptorTable(1, &cbvRange, D3D12_SHADER_VISIBILITY_VERTEX);
+        CD3DX12_DESCRIPTOR_RANGE1 sceneDataDescriptorRange;
+        sceneDataDescriptorRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
 
-        D3D12_ROOT_PARAMETER1 rootParameters[] = { cbvScene };
+        CD3DX12_DESCRIPTOR_RANGE1 textureDataDescriptorRange;
+        textureDataDescriptorRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+
+        CD3DX12_ROOT_PARAMETER1 sceneDataParam;
+        sceneDataParam.InitAsDescriptorTable(1, &sceneDataDescriptorRange, D3D12_SHADER_VISIBILITY_VERTEX);
+
+        CD3DX12_ROOT_PARAMETER1 textureDataParam;
+        textureDataParam.InitAsDescriptorTable(1, &textureDataDescriptorRange, D3D12_SHADER_VISIBILITY_PIXEL);
+
+        D3D12_STATIC_SAMPLER_DESC textureSamplerDesc{};
+        textureSamplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        textureSamplerDesc.AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+        textureSamplerDesc.AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+        textureSamplerDesc.AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+        textureSamplerDesc.MipLODBias = 0.0F;
+        textureSamplerDesc.MaxAnisotropy = 0;
+        textureSamplerDesc.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+        textureSamplerDesc.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
+        textureSamplerDesc.MinLOD = 0.0F;
+        textureSamplerDesc.MaxLOD = D3D12_FLOAT32_MAX;
+        textureSamplerDesc.ShaderRegister = 0;
+        textureSamplerDesc.RegisterSpace = 0;
+        textureSamplerDesc.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        D3D12_ROOT_PARAMETER1 rootParameters[] = { sceneDataParam, textureDataParam };
+        D3D12_STATIC_SAMPLER_DESC staticSamplers[] = { textureSamplerDesc };
         D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc{};
         rootSignatureDesc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
         rootSignatureDesc.Desc_1_1.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
@@ -361,8 +407,8 @@ namespace Engine
             | D3D12_ROOT_SIGNATURE_FLAG_DENY_MESH_SHADER_ROOT_ACCESS;
         rootSignatureDesc.Desc_1_1.NumParameters = sizeof_array(rootParameters);
         rootSignatureDesc.Desc_1_1.pParameters = rootParameters;
-        rootSignatureDesc.Desc_1_1.NumStaticSamplers = 0;
-        rootSignatureDesc.Desc_1_1.pStaticSamplers = nullptr;
+        rootSignatureDesc.Desc_1_1.NumStaticSamplers = sizeof_array(staticSamplers);
+        rootSignatureDesc.Desc_1_1.pStaticSamplers = staticSamplers;
 
         ComPtr<ID3DBlob> rootSignatureBlob;
         ComPtr<ID3DBlob> rootSignatureError;
@@ -387,8 +433,8 @@ namespace Engine
         compileFlags |= D3DCOMPILE_DEBUG
             | D3DCOMPILE_SKIP_OPTIMIZATION;
 #endif
-        if (FAILED(D3DCompileFromFile(L"../data/shader.hlsl", nullptr, nullptr, "VSForward", "vs_5_1", compileFlags, 0, &vertexShader, &shaderError))
-            || FAILED(D3DCompileFromFile(L"../data/shader.hlsl", nullptr, nullptr, "PSForward", "ps_5_1", compileFlags, 0, &pixelShader, &shaderError)))
+        if (FAILED(D3DCompileFromFile(L"../data/shaders/shader.hlsl", nullptr, nullptr, "VSForward", "vs_5_0", compileFlags, 0, &vertexShader, &shaderError))
+            || FAILED(D3DCompileFromFile(L"../data/shaders/shader.hlsl", nullptr, nullptr, "PSForward", "ps_5_0", compileFlags, 0, &pixelShader, &shaderError)))
         {
             printf("D3D12 shader compilation failed\n");
             if (shaderError != nullptr) {
@@ -454,32 +500,30 @@ namespace Engine
         viewport = CD3DX12_VIEWPORT(0.0F, 0.0F, static_cast<float>(DefaultWindowWidth), static_cast<float>(DefaultWindowHeight), 0.0F, 1.0F);
         scissor = CD3DX12_RECT(0, 0, DefaultWindowWidth, DefaultWindowHeight);
 
-        // Cache heap properties for upload heap
-        D3D12_HEAP_PROPERTIES uploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+        // Create descriptor resource heap
+        D3D12_DESCRIPTOR_HEAP_DESC descriptorResourceHeapDesc{};
+        descriptorResourceHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        descriptorResourceHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        descriptorResourceHeapDesc.NumDescriptors = 2; // cbv + 1 texture
+        descriptorResourceHeapDesc.NodeMask = 0x00;
 
-        // Create scene data cbv & load scene data
-        D3D12_DESCRIPTOR_HEAP_DESC sceneDataCBVHeapDesc{};
-        sceneDataCBVHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        sceneDataCBVHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        sceneDataCBVHeapDesc.NumDescriptors = 1;
-        sceneDataCBVHeapDesc.NodeMask = 0x00;
-
-        if (FAILED(device->CreateDescriptorHeap(&sceneDataCBVHeapDesc, IID_PPV_ARGS(&sceneDataCBVHeap))))
+        if (FAILED(device->CreateDescriptorHeap(&descriptorResourceHeapDesc, IID_PPV_ARGS(&descriptorResourceHeap))))
         {
             printf("D3D12 scene data cbv heap create failed\n");
             return false;
         }
 
+        // Create scene data buffer
         uint32_t const sceneDataBufferSize = sizeof(SceneData);
         D3D12_RESOURCE_DESC sceneDataBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(sceneDataBufferSize);
-        if (FAILED(device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &sceneDataBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&sceneDataBuffer))))
+        if (FAILED(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE, &sceneDataBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&sceneDataBuffer))))
         {
             printf("D3D12 scene data buffer create failed\n");
             return false;
         }
 
-        sceneDataBufferView = D3D12_CONSTANT_BUFFER_VIEW_DESC{ sceneDataBuffer->GetGPUVirtualAddress(), sceneDataBufferSize };
-        device->CreateConstantBufferView(&sceneDataBufferView, CD3DX12_CPU_DESCRIPTOR_HANDLE(sceneDataCBVHeap->GetCPUDescriptorHandleForHeapStart(), 0, cbvHeapIncrementSize));
+        D3D12_CONSTANT_BUFFER_VIEW_DESC sceneDataBufferView = D3D12_CONSTANT_BUFFER_VIEW_DESC{ sceneDataBuffer->GetGPUVirtualAddress(), sceneDataBufferSize };
+        device->CreateConstantBufferView(&sceneDataBufferView, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 0, cbvHeapIncrementSize));
 
         // Load mesh data
         Vertex const vertices[] = {
@@ -500,14 +544,14 @@ namespace Engine
         uint32_t const indexBufferSize = sizeof_array(indices) * sizeof(uint32_t);
 
         D3D12_RESOURCE_DESC vertexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
-        if (FAILED(device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &vertexBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexBuffer))))
+        if (FAILED(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE, &vertexBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexBuffer))))
         {
             printf("D3D12 vertex buffer create failed\n");
             return false;
         }
 
         D3D12_RESOURCE_DESC indexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
-        if (FAILED(device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &indexBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indexBuffer))))
+        if (FAILED(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE, &indexBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indexBuffer))))
         {
             printf("D3D12 index buffer create failed\n");
             return false;
@@ -537,6 +581,62 @@ namespace Engine
 
         memcpy(pIndexData, indices, indexBufferSize);
         indexBuffer->Unmap(0, nullptr);
+
+        // Load material data
+        int colorTextureWidth = 0, colorTextureHeight = 0;
+        stbi_uc* pColorTextureImageData = stbi_load("../data/assets/brickwall.jpg", &colorTextureWidth, &colorTextureHeight, nullptr, 4);
+        if (pColorTextureImageData == nullptr)
+        {
+            printf("STB Image texture load failed\n");
+            return false;
+        }
+
+        D3D12_RESOURCE_DESC colorTextureDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R8G8B8A8_UNORM, colorTextureWidth, colorTextureHeight, 1, 1);
+        if (FAILED(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), D3D12_HEAP_FLAG_NONE, &colorTextureDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&colorTexture))))
+        {
+            printf("D3D12 color texture create failed\n");
+            return false;
+        }
+
+        uint64_t uploadBufferSize = GetRequiredIntermediateSize(colorTexture.Get(), 0, 1);
+        ComPtr<ID3D12Resource> uploadBuffer;
+        D3D12_RESOURCE_DESC uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+        if (FAILED(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), D3D12_HEAP_FLAG_NONE, &uploadBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer))))
+        {
+            printf("D3D12 color texture upload buffer create failed\n");
+            return false;
+        }
+
+        // Perform upload using transient commandlist
+        {
+            ComPtr<ID3D12GraphicsCommandList> uploadCommandList;
+            device->CreateCommandList(0x00, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.Get(), nullptr, IID_PPV_ARGS(&uploadCommandList));
+
+            D3D12_SUBRESOURCE_DATA colorTextureData{};
+            colorTextureData.pData = pColorTextureImageData;
+            colorTextureData.RowPitch = colorTextureWidth * 4;
+            colorTextureData.SlicePitch = colorTextureHeight * colorTextureWidth * 4;
+
+            UpdateSubresources(uploadCommandList.Get(), colorTexture.Get(), uploadBuffer.Get(), 0, 0, 1, &colorTextureData);
+
+            D3D12_RESOURCE_BARRIER colorTextureBarrier = CD3DX12_RESOURCE_BARRIER::Transition(colorTexture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            uploadCommandList->ResourceBarrier(1, &colorTextureBarrier);
+            uploadCommandList->Close();
+
+            ID3D12CommandList* ppUploadCommandLists[] = { uploadCommandList.Get()};
+            commandQueue->ExecuteCommandLists(1, ppUploadCommandLists);
+            D3D12Helpers::waitForGPU(commandQueue.Get(), fenceEvent, fenceValue);
+        }
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC colorTextureViewDesc{};
+        colorTextureViewDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        colorTextureViewDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        colorTextureViewDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        colorTextureViewDesc.Texture2D.MostDetailedMip = 0;
+        colorTextureViewDesc.Texture2D.MipLevels = 1;
+        colorTextureViewDesc.Texture2D.PlaneSlice = 0;
+        colorTextureViewDesc.Texture2D.ResourceMinLODClamp = 0.0F;
+        device->CreateShaderResourceView(colorTexture.Get(), &colorTextureViewDesc, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 1, cbvHeapIncrementSize));
 
         D3D12Helpers::waitForGPU(commandQueue.Get(), fenceEvent, fenceValue); //< wait for GPU queue just to be sure all uploads are finished
         printf("Initialized Big Renderer\n");
@@ -573,6 +673,16 @@ namespace Engine
             return;
         }
 
+        // Resize depth buffer
+        D3D12_RESOURCE_DESC depthStencilDesc = CD3DX12_RESOURCE_DESC::Tex2D(SwapDepthStencilFormat, width, height, 1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+        D3D12_CLEAR_VALUE depthStencilClearValue = CD3DX12_CLEAR_VALUE(SwapDepthStencilFormat, 1.0F, 0x00);
+        if (FAILED(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), D3D12_HEAP_FLAG_NONE, &depthStencilDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthStencilClearValue, IID_PPV_ARGS(&depthStencilTarget))))
+        {
+            printf("D3D12 swap depth buffer resize failed\n");
+            isRunning = false;
+            return;
+        }
+
         // Recreate swap resources
         CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rtvHeap->GetCPUDescriptorHandleForHeapStart());
         for (uint32_t frameIdx = 0; frameIdx < FrameCount; frameIdx++)
@@ -594,13 +704,17 @@ namespace Engine
             rtvHandle.Offset(1, rtvHeapIncrementSize);
         }
 
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+        dsvDesc.Format = SwapDepthStencilFormat;
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        dsvDesc.Texture2D.MipSlice = 0;
+
+        CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(dsvHeap->GetCPUDescriptorHandleForHeapStart());
+        device->CreateDepthStencilView(depthStencilTarget.Get(), &dsvDesc, dsvHandle);
+
         // Set viewport & scissor
         viewport = CD3DX12_VIEWPORT(0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height), 0.0F, 1.0F);
         scissor = CD3DX12_RECT(0, 0, width, height);
-
-        // Update render data
-        screenWidth = width;
-        screenHeight = height;
 
         printf("Window resized (%d x %d)\n", width, height);
     }
@@ -633,13 +747,12 @@ namespace Engine
         }
 
         // Update render data
-        rotation += rotationSpeed * static_cast<float>(frameTimer.deltaTimeMS() / 1'000.0);
-        sceneData.viewproject = glm::perspective(glm::radians(60.0F), (float)(screenWidth) / (float)(screenHeight), 0.1F, 10.0F)
+        sceneData.viewproject = glm::perspective(glm::radians(60.0F), (float)(viewport.Width) / (float)(viewport.Height), 0.1F, 10.0F)
             * glm::lookAt(glm::vec3(0.0F, 0.0F, 5.0F), glm::vec3(0.0F, 0.0F, 0.0F), glm::vec3(0.0F, 1.0F, 0.0F));
-        sceneData.model = glm::rotate(glm::identity<glm::mat4>(), glm::radians(rotation), glm::vec3(0.0F, 1.0F, 0.0F));
+        sceneData.model = glm::identity<glm::mat4>();
         sceneData.normal = glm::mat4(glm::transpose(glm::inverse(glm::mat3(sceneData.model))));
 
-        // Upload render data to GPU buffers
+        // Upload render data to GPU visible buffers
         D3D12_RANGE readRange = CD3DX12_RANGE(0, 0);
         void* pSceneData = nullptr;
         if (FAILED(sceneDataBuffer->Map(0, &readRange, &pSceneData)))
@@ -681,12 +794,13 @@ namespace Engine
             commandList->ClearDepthStencilView(currentSwapDSV, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0F, 0x00, 0, nullptr);
 
             // Set used descriptor heaps for this frame
-            ID3D12DescriptorHeap* ppDescriptorHeaps[] = { sceneDataCBVHeap.Get() };
+            ID3D12DescriptorHeap* ppDescriptorHeaps[] = { descriptorResourceHeap.Get() };
             commandList->SetDescriptorHeaps(sizeof_array(ppDescriptorHeaps), ppDescriptorHeaps);
 
             // Set root signature
             commandList->SetGraphicsRootSignature(rootSignature.Get());
-            commandList->SetGraphicsRootDescriptorTable(0, sceneDataCBVHeap->GetGPUDescriptorHandleForHeapStart());
+            commandList->SetGraphicsRootDescriptorTable(0, CD3DX12_GPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetGPUDescriptorHandleForHeapStart(), 0, cbvHeapIncrementSize));
+            commandList->SetGraphicsRootDescriptorTable(1, CD3DX12_GPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetGPUDescriptorHandleForHeapStart(), 1, cbvHeapIncrementSize));
 
             // Set pipeline state
             commandList->SetPipelineState(graphicsPipeline.Get());
