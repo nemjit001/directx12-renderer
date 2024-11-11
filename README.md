@@ -19,4 +19,4 @@ DirectX 12 toy renderer written in C++. Loosely based on the [directx graphics s
 - [ ] PBR pipeline
 - [ ] Transparency
 
-![A sample image that was rendered using DX12 renderer](./render_sample.png_?raw=true "Render Sample")
+![A sample image that was rendered using DX12 renderer](render_sample.png?raw=true "Render Sample")
