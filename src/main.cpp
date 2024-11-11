@@ -63,7 +63,7 @@ namespace Engine
         glm::mat4 normal; //< normal / tangent transform
     };
 
-    constexpr char const* WindowTitle = "Big Renderer";
+    constexpr char const* WindowTitle = "DX12 Renderer";
     constexpr uint32_t DefaultWindowWidth = 1600;
     constexpr uint32_t DefaultWindowHeight = 900;
 
@@ -824,13 +824,13 @@ namespace Engine
         device->CreateShaderResourceView(normalTexture.Get(), &normalTextureViewDesc, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 2, cbvHeapIncrementSize));
 
         D3D12Helpers::waitForGPU(commandQueue.Get(), fenceEvent, fenceValue); //< wait for GPU queue just to be sure all uploads are finished
-        printf("Initialized Big Renderer\n");
+        printf("Initialized DX12 Renderer\n");
         return true;
     }
 
     void shutdown()
     {
-        printf("Shutting down Big Renderer\n");
+        printf("Shutting down DX12 Renderer\n");
 
         D3D12Helpers::waitForGPU(commandQueue.Get(), fenceEvent, fenceValue);
         ImGui_ImplDX12_Shutdown();
@@ -943,7 +943,7 @@ namespace Engine
         ImGui_ImplDX12_NewFrame();
         ImGui::NewFrame();
 
-        if (ImGui::Begin("Big Renderer Config"))
+        if (ImGui::Begin("DX12 Renderer Config"))
         {
             ImGui::SeparatorText("Stats");
             ImGui::Text("Frame time: %10.2f ms", frameTimer.deltaTimeMS());

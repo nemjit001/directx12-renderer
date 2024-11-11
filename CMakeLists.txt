@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project("Big Renderer" VERSION 0.1.0)
+project("DX12 Renderer" VERSION 0.1.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,18 +30,18 @@ target_include_directories(imgui PUBLIC "vendored/imgui/" "vendored/imgui/backen
 target_link_libraries(imgui PUBLIC SDL2::SDL2)
 
 # Big Renderer project
-file(GLOB_RECURSE BIG_RENDERER_SOURCES CONFIGURE_DEPENDS "src/*.cpp" "src/*.hpp")
-add_executable(BigRenderer ${BIG_RENDERER_SOURCES})
-target_link_libraries(BigRenderer PRIVATE dxgi d3d12 d3dcompiler DirectX-Guids DirectX-Headers glm::glm imgui SDL2::SDL2 stb tinyobjloader)
-# set_target_properties(BigRenderer PROPERTIES COMPILE_WARNING_AS_ERROR ON)
+file(GLOB_RECURSE DX12_RENDERER_SOURCES CONFIGURE_DEPENDS "src/*.cpp" "src/*.hpp")
+add_executable(DX12Renderer ${DX12_RENDERER_SOURCES})
+target_link_libraries(DX12Renderer PRIVATE dxgi d3d12 d3dcompiler DirectX-Guids DirectX-Headers glm::glm imgui SDL2::SDL2 stb tinyobjloader)
+# set_target_properties(DX12Renderer PROPERTIES COMPILE_WARNING_AS_ERROR ON)
 
 if (MSVC)
-	target_compile_options(BigRenderer PRIVATE /W4)
+	target_compile_options(DX12Renderer PRIVATE /W4)
 else()
-	target_compile_options(BigRenderer PRIVATE -Wall -Wpedantic -Wextra)
+	target_compile_options(DX12Renderer PRIVATE -Wall -Wpedantic -Wextra)
 endif()
 
-add_custom_target(BigRendererCopyData ALL
+add_custom_target(RendererCopyData ALL
 	COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/data/" "${CMAKE_BINARY_DIR}/data/"
-	COMMENT "BigRenderer: Copying data files..."
+	COMMENT "Renderer: Copying data files..."
 )
