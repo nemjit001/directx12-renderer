@@ -4,7 +4,7 @@ DirectX 12 toy renderer written in C++. Loosely based on the [directx graphics s
 
 ## Features
 
-- [ ] Mesh loading
+- [X] OBJ mesh loading
 - [X] Texture mapping
 - [ ] Scene loading (glTF2.0)
 - [ ] Lights

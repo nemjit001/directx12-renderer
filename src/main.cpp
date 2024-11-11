@@ -6,11 +6,13 @@
 #define GLM_FORCE_RADIANS
 #define SDL_MAIN_HANDLED
 #define STB_IMAGE_IMPLEMENTATION
+#define TINYOBJLOADER_IMPLEMENTATION
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <SDL.h>
 #include <SDL_syswm.h>
 #include <stb_image.h>
+#include <tiny_obj_loader.h>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -32,13 +34,14 @@ namespace Engine
     /// @brief Interleaved vertex data.
     struct Vertex
     {
-        float position[3]; //< local position
-        float color[3]; //< vertex color
-        float normal[3]; //< local normal
-        float tangent[3]; //< local tangent
-        float texCoord[2]; //< texture coordinate
+        glm::vec3 position; //< local position
+        glm::vec3 color; //< vertex color
+        glm::vec3 normal; //< local normal
+        glm::vec3 tangent; //< local tangent
+        glm::vec2 texCoord; //< texture coordinate
     };
 
+    /// @brief Mesh data with indexed vertices
     struct Mesh
     {
         uint32_t vertexCount = 0;
@@ -190,6 +193,73 @@ namespace Engine
             mesh.indexBufferView = D3D12_INDEX_BUFFER_VIEW{ mesh.indexBuffer->GetGPUVirtualAddress(), indexBufferSize, DXGI_FORMAT_R32_UINT };
 
             return true;
+        }
+
+        bool loadOBJ(char const* path, Mesh& mesh)
+        {
+            tinyobj::ObjReader reader;
+            tinyobj::ObjReaderConfig config;
+
+            config.triangulate = true;
+            config.triangulation_method = "earcut";
+            config.vertex_color = true;
+
+            if (!reader.ParseFromFile(path))
+            {
+                printf("TinyOBJ OBJ load failed [%s]\n", path);
+                return false;
+            }
+            printf("Loaded OBJ mesh [%s]\n", path);
+
+            auto const& attrib = reader.GetAttrib();
+            auto const& shapes = reader.GetShapes();
+
+            std::vector<Vertex> vertices;
+            std::vector<uint32_t> indices;
+            for (auto const& shape : shapes)
+            {
+                vertices.reserve(vertices.size() + shape.mesh.indices.size());
+                indices.reserve(indices.size() + shape.mesh.indices.size());
+
+                for (auto const& index : shape.mesh.indices)
+                {
+                    size_t vertexIdx = index.vertex_index * 3;
+                    size_t normalIdx = index.normal_index * 3;
+                    size_t texIdx = index.texcoord_index * 2;
+
+                    vertices.push_back(Vertex{
+                        { attrib.vertices[vertexIdx + 0], attrib.vertices[vertexIdx + 1], attrib.vertices[vertexIdx + 2] },
+                        { attrib.colors[vertexIdx + 0], attrib.colors[vertexIdx + 1], attrib.colors[vertexIdx + 2] },
+                        { attrib.normals[normalIdx + 0], attrib.normals[normalIdx + 1], attrib.normals[normalIdx + 2] },
+                        { 0.0F, 0.0F, 0.0F }, //< tangents are calculated after loading
+                        { attrib.texcoords[texIdx + 0], attrib.texcoords[texIdx + 1] },
+                    });
+                    indices.push_back(static_cast<uint32_t>(indices.size())); //< works because mesh is triangulated
+                }
+            }
+
+            // calculate tangents based on position & texture coords
+            assert(indices.size() % 3 == 0); //< Need multiple of 3 for triangle indices
+            for (size_t i = 0; i < indices.size(); i += 3)
+            {
+                Vertex& v0 = vertices[indices[i + 0]];
+                Vertex& v1 = vertices[indices[i + 1]];
+                Vertex& v2 = vertices[indices[i + 2]];
+
+                glm::vec3 const e1 = v1.position - v0.position;
+                glm::vec3 const e2 = v2.position - v0.position;
+                glm::vec2 const dUV1 = v1.texCoord - v0.texCoord;
+                glm::vec2 const dUV2 = v2.texCoord - v0.texCoord;
+
+                float const f = 1.0F / (dUV1.x * dUV2.y - dUV1.y * dUV2.x);
+                glm::vec3 const tangent = f * (dUV2.y * e1 - dUV1.y * e2);
+
+                v0.tangent = tangent;
+                v1.tangent = tangent;
+                v2.tangent = tangent;
+            }
+
+            return createMesh(mesh, vertices.data(), static_cast<uint32_t>(vertices.size()), indices.data(), static_cast<uint32_t>(indices.size()));
         }
 
         bool loadTexture(char const* path, ID3D12Resource** ppResource)
@@ -679,9 +749,9 @@ namespace Engine
             2, 3, 0
         };
 
-        if (!D3D12Helpers::createMesh(mesh, verts.data(), (uint32_t)verts.size(), idxs.data(), (uint32_t)idxs.size()))
+        if (!D3D12Helpers::loadOBJ("../data/assets/suzanne.obj", mesh))
         {
-            printf("Mesh create failed\n");
+            printf("Mesh load failed\n");
             return false;
         }
 
@@ -828,7 +898,7 @@ namespace Engine
 
         // Update render data
         sceneData.viewproject = glm::perspective(glm::radians(60.0F), (float)(viewport.Width) / (float)(viewport.Height), 0.1F, 10.0F)
-            * glm::lookAt(glm::vec3(0.0F, 0.0F, 5.0F), glm::vec3(0.0F, 0.0F, 0.0F), glm::vec3(0.0F, 1.0F, 0.0F));
+            * glm::lookAt(glm::vec3(0.0F, 0.0F, -5.0F), glm::vec3(0.0F, 0.0F, 0.0F), glm::vec3(0.0F, 1.0F, 0.0F));
         sceneData.model = glm::identity<glm::mat4>();
         sceneData.normal = glm::mat4(glm::transpose(glm::inverse(glm::mat3(sceneData.model))));
 

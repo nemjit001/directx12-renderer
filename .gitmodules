@@ -10,3 +10,6 @@
 [submodule "vendored/stb"]
 	path = vendored/stb
 	url = https://github.com/nothings/stb
+[submodule "vendored/tinyobjloader"]
+	path = vendored/tinyobjloader
+	url = https://github.com/tinyobjloader/tinyobjloader

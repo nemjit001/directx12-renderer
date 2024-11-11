@@ -14,6 +14,7 @@ set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory("vendored/DirectX-Headers/")
 add_subdirectory("vendored/glm/")
 add_subdirectory("vendored/SDL/")
+add_subdirectory("vendored/tinyobjloader/")
 
 # STB project
 add_library(stb INTERFACE)
@@ -22,7 +23,7 @@ target_include_directories(stb INTERFACE "vendored/stb")
 # Big Renderer project
 file(GLOB_RECURSE BIG_RENDERER_SOURCES CONFIGURE_DEPENDS "src/*.cpp" "src/*.hpp")
 add_executable(BigRenderer ${BIG_RENDERER_SOURCES})
-target_link_libraries(BigRenderer PRIVATE dxgi d3d12 d3dcompiler DirectX-Guids DirectX-Headers glm::glm SDL2::SDL2 stb)
+target_link_libraries(BigRenderer PRIVATE dxgi d3d12 d3dcompiler DirectX-Guids DirectX-Headers glm::glm SDL2::SDL2 stb tinyobjloader)
 # set_target_properties(BigRenderer PROPERTIES COMPILE_WARNING_AS_ERROR ON)
 
 if (MSVC)
