@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #define GLM_FORCE_RADIANS
@@ -36,6 +37,67 @@ namespace Engine
         float normal[3]; //< local normal
         float tangent[3]; //< local tangent
         float texCoord[2]; //< texture coordinate
+    };
+
+    class Mesh
+    {
+    public:
+        Mesh(ID3D12Device* pDevice, std::vector<Vertex> const& vertices, std::vector<uint32_t> const& indices)
+        {
+            vertexCount = static_cast<uint32_t>(vertices.size());
+            indexCount = static_cast<uint32_t>(indices.size());
+            uint32_t const vertexBufferSize = vertexCount * sizeof(Vertex);
+            uint32_t const indexBufferSize = indexCount * sizeof(uint32_t);
+
+            D3D12_RESOURCE_DESC vertexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
+            D3D12_HEAP_PROPERTIES vertexBufferHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+            if (FAILED(pDevice->CreateCommittedResource(&vertexBufferHeap, D3D12_HEAP_FLAG_NONE, &vertexBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexBuffer))))
+            {
+                printf("D3D12 vertex buffer create failed\n");
+                abort();
+            }
+
+            D3D12_RESOURCE_DESC indexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
+            D3D12_HEAP_PROPERTIES indexBufferHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+            if (FAILED(pDevice->CreateCommittedResource(&indexBufferHeap, D3D12_HEAP_FLAG_NONE, &indexBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indexBuffer))))
+            {
+                printf("D3D12 index buffer create failed\n");
+                abort();
+            }
+
+            D3D12_RANGE vertexReadRange = CD3DX12_RANGE(0, 0);
+            void* pVertexData = nullptr;
+            if (FAILED(vertexBuffer->Map(0, &vertexReadRange, &pVertexData)))
+            {
+                printf("D3D12 vertex buffer map failed\n");
+                abort();
+            }
+
+            memcpy(pVertexData, vertices.data(), vertexBufferSize);
+            vertexBuffer->Unmap(0, nullptr);
+
+            D3D12_RANGE indexReadRange = CD3DX12_RANGE(0, 0);
+            void* pIndexData = nullptr;
+            if (FAILED(indexBuffer->Map(0, &indexReadRange, &pIndexData)))
+            {
+                printf("D3D12 index buffer map failed\n");
+                abort();
+            }
+
+            memcpy(pIndexData, indices.data(), indexBufferSize);
+            indexBuffer->Unmap(0, nullptr);
+
+
+            vertexBufferView = D3D12_VERTEX_BUFFER_VIEW{ vertexBuffer->GetGPUVirtualAddress(), vertexBufferSize, sizeof(Vertex) };
+            indexBufferView = D3D12_INDEX_BUFFER_VIEW{ indexBuffer->GetGPUVirtualAddress(), indexBufferSize, DXGI_FORMAT_R32_UINT };
+        }
+
+        uint32_t vertexCount = 0;
+        uint32_t indexCount = 0;
+        ComPtr<ID3D12Resource> vertexBuffer;
+        ComPtr<ID3D12Resource> indexBuffer;
+        D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
+        D3D12_INDEX_BUFFER_VIEW indexBufferView;
     };
 
     /// @brief Scene constant buffer data.
@@ -94,12 +156,7 @@ namespace Engine
     ComPtr<ID3D12Resource> sceneDataBuffer;
 
     // Mesh data
-    uint32_t vertexCount = 0;
-    uint32_t indexCount = 0;
-    ComPtr<ID3D12Resource> vertexBuffer;
-    D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
-    ComPtr<ID3D12Resource> indexBuffer;
-    D3D12_INDEX_BUFFER_VIEW indexBufferView;
+    Mesh* pMesh = nullptr;
 
     // Material data
     ComPtr<ID3D12Resource> colorTexture;
@@ -604,63 +661,19 @@ namespace Engine
         device->CreateConstantBufferView(&sceneDataBufferView, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 0, cbvHeapIncrementSize));
 
         // Load mesh data
-        Vertex const vertices[] = {
-            Vertex{ { -1.0F, -1.0F,  1.0F }, { 1.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 0.0F }, { 0.0F, 0.0F } },
-            Vertex{ { -1.0F,  1.0F,  1.0F }, { 0.0F, 1.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F } },
-            Vertex{ {  1.0F,  1.0F,  1.0F }, { 0.0F, 0.0F, 1.0F }, { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 0.0F }, { 1.0F, 1.0F } },
-            Vertex{ {  1.0F, -1.0F,  1.0F }, { 1.0F, 1.0F, 1.0F }, { 0.0F, 0.0F, 1.0F }, { 1.0F, 0.0F, 0.0F }, { 1.0F, 0.0F } },
+        std::vector<Vertex> verts = {
+            Vertex{ { -1.0F, -1.0F, 0.0F }, { 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 0.0F, 1.0F, 0.0F }, { 0.0F, 0.0F } },
+            Vertex{ {  1.0F, -1.0F, 0.0F }, { 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 0.0F, 1.0F, 0.0F }, { 1.0F, 0.0F } },
+            Vertex{ {  1.0F,  1.0F, 0.0F }, { 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 0.0F, 1.0F, 0.0F }, { 1.0F, 1.0F } },
+            Vertex{ { -1.0F,  1.0F, 0.0F }, { 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 0.0F, 1.0F, 0.0F }, { 0.0F, 1.0F } },
         };
 
-        uint32_t const indices[] = {
+        std::vector<uint32_t> idxs = {
             0, 1, 2,
-            2, 3, 0,
+            2, 3, 0
         };
 
-        vertexCount = sizeof_array(vertices);
-        indexCount = sizeof_array(indices);
-        uint32_t const vertexBufferSize = sizeof_array(vertices) * sizeof(Vertex);
-        uint32_t const indexBufferSize = sizeof_array(indices) * sizeof(uint32_t);
-
-        D3D12_RESOURCE_DESC vertexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
-        D3D12_HEAP_PROPERTIES vertexBufferHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-        if (FAILED(device->CreateCommittedResource(&vertexBufferHeap, D3D12_HEAP_FLAG_NONE, &vertexBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexBuffer))))
-        {
-            printf("D3D12 vertex buffer create failed\n");
-            return false;
-        }
-
-        D3D12_RESOURCE_DESC indexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
-        D3D12_HEAP_PROPERTIES indexBufferHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-        if (FAILED(device->CreateCommittedResource(&indexBufferHeap, D3D12_HEAP_FLAG_NONE, &indexBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indexBuffer))))
-        {
-            printf("D3D12 index buffer create failed\n");
-            return false;
-        }
-
-        vertexBufferView = D3D12_VERTEX_BUFFER_VIEW{ vertexBuffer->GetGPUVirtualAddress(), vertexBufferSize, sizeof(Vertex) };
-        indexBufferView = D3D12_INDEX_BUFFER_VIEW{ indexBuffer->GetGPUVirtualAddress(), indexBufferSize, DXGI_FORMAT_R32_UINT };
-
-        D3D12_RANGE vertexReadRange = CD3DX12_RANGE(0, 0);
-        void* pVertexData = nullptr;
-        if (FAILED(vertexBuffer->Map(0, &vertexReadRange, &pVertexData)))
-        {
-            printf("D3D12 vertex buffer map failed\n");
-            return false;
-        }
-
-        memcpy(pVertexData, vertices, vertexBufferSize);
-        vertexBuffer->Unmap(0, nullptr);
-
-        D3D12_RANGE indexReadRange = CD3DX12_RANGE(0, 0);
-        void* pIndexData = nullptr;
-        if (FAILED(indexBuffer->Map(0, &indexReadRange, &pIndexData)))
-        {
-            printf("D3D12 index buffer map failed\n");
-            return false;
-        }
-
-        memcpy(pIndexData, indices, indexBufferSize);
-        indexBuffer->Unmap(0, nullptr);
+        pMesh = new Mesh(device.Get(), verts, idxs);
 
         // Load material data
         if (!D3D12Helpers::loadTexture("../data/assets/brickwall.jpg", &colorTexture)) {
@@ -705,6 +718,7 @@ namespace Engine
 
         D3D12Helpers::waitForGPU(commandQueue.Get(), fenceEvent, fenceValue);
         CloseHandle(fenceEvent);
+        delete pMesh;
 
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -865,11 +879,12 @@ namespace Engine
             commandList->RSSetScissorRects(1, &scissor);
 
             // Draw mesh
-            D3D12_VERTEX_BUFFER_VIEW pVertexBuffers[] = { vertexBufferView };
+            assert(pMesh != nullptr);
+            D3D12_VERTEX_BUFFER_VIEW pVertexBuffers[] = { pMesh->vertexBufferView };
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             commandList->IASetVertexBuffers(0, sizeof_array(pVertexBuffers), pVertexBuffers);
-            commandList->IASetIndexBuffer(&indexBufferView);
-            commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+            commandList->IASetIndexBuffer(&pMesh->indexBufferView);
+            commandList->DrawIndexedInstanced(pMesh->indexCount, 1, 0, 0, 0);
 
             // Transition to present state
             CD3DX12_RESOURCE_BARRIER swapPresentBarrier = CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[backbufferIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
