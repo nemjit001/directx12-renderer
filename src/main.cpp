@@ -37,11 +37,29 @@ namespace Engine
     /// @brief Interleaved vertex data.
     struct Vertex
     {
-        glm::vec3 position; //< local position
-        glm::vec3 color; //< vertex color
-        glm::vec3 normal; //< local normal
-        glm::vec3 tangent; //< local tangent
-        glm::vec2 texCoord; //< texture coordinate
+        glm::vec3 position;
+        glm::vec3 color;
+        glm::vec3 normal;
+        glm::vec3 tangent;
+        glm::vec2 texCoord;
+    };
+
+    /// @brief Camera data (transform + project)
+    struct Camera
+    {
+        glm::vec3 position = glm::vec3(0.0F);
+        glm::vec3 forward = glm::vec3(0.0F, 0.0F, 1.0F);
+        glm::vec3 up = glm::vec3(0.0F, 1.0F, 0.0F);
+
+        float FOVy = 60.0F;
+        float aspectRatio = 1.0F;
+        float zNear = 0.1F;
+        float zFar = 100.0F;
+
+        glm::mat4 viewproject()
+        {
+            return glm::perspective(glm::radians(FOVy), aspectRatio, zNear, zFar) * glm::lookAt(position, position + forward, up);
+        }
     };
 
     /// @brief Mesh data with indexed vertices
@@ -58,9 +76,10 @@ namespace Engine
     /// @brief Scene constant buffer data.
     struct alignas(256) SceneData
     {
-        glm::mat4 viewproject; //< Camera view project matrix
-        glm::mat4 model; //< Model transform
-        glm::mat4 normal; //< normal / tangent transform
+        alignas(4) glm::vec3 cameraPosition;
+        alignas(16) glm::mat4 viewproject;
+        alignas(16) glm::mat4 model;
+        alignas(16) glm::mat4 normal;
     };
 
     constexpr char const* WindowTitle = "DX12 Renderer";
@@ -112,7 +131,8 @@ namespace Engine
     ComPtr<ID3D12DescriptorHeap> descriptorResourceHeap;
     ComPtr<ID3D12Resource> sceneDataBuffer;
 
-    // Mesh data
+    // Scene objects
+    Camera camera;
     Mesh mesh;
 
     // Material data
@@ -772,19 +792,11 @@ namespace Engine
         D3D12_CONSTANT_BUFFER_VIEW_DESC sceneDataBufferView = D3D12_CONSTANT_BUFFER_VIEW_DESC{ sceneDataBuffer->GetGPUVirtualAddress(), sceneDataBufferSize };
         device->CreateConstantBufferView(&sceneDataBufferView, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 0, cbvHeapIncrementSize));
 
+        // Set camera params
+        camera.position = glm::vec3(0.0F, 0.0F, -5.0F);
+        camera.aspectRatio = static_cast<float>(DefaultWindowWidth) / static_cast<float>(DefaultWindowHeight);
+
         // Load mesh data
-        std::vector<Vertex> verts = {
-            Vertex{ { -1.0F, -1.0F, 0.0F }, { 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 0.0F, 1.0F, 0.0F }, { 0.0F, 0.0F } },
-            Vertex{ {  1.0F, -1.0F, 0.0F }, { 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 0.0F, 1.0F, 0.0F }, { 1.0F, 0.0F } },
-            Vertex{ {  1.0F,  1.0F, 0.0F }, { 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 0.0F, 1.0F, 0.0F }, { 1.0F, 1.0F } },
-            Vertex{ { -1.0F,  1.0F, 0.0F }, { 0.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, { 0.0F, 1.0F, 0.0F }, { 0.0F, 1.0F } },
-        };
-
-        std::vector<uint32_t> idxs = {
-            0, 1, 2,
-            2, 3, 0
-        };
-
         if (!D3D12Helpers::loadOBJ("../data/assets/suzanne.obj", mesh))
         {
             printf("Mesh load failed\n");
@@ -906,6 +918,9 @@ namespace Engine
         viewport = CD3DX12_VIEWPORT(0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height), 0.0F, 1.0F);
         scissor = CD3DX12_RECT(0, 0, width, height);
 
+        // Update camera aspect ratio
+        camera.aspectRatio = static_cast<float>(width) / static_cast<float>(height);
+
         printf("Window resized (%d x %d)\n", width, height);
     }
 
@@ -954,8 +969,8 @@ namespace Engine
         ImGui::Render();
 
         // Update render data
-        sceneData.viewproject = glm::perspective(glm::radians(60.0F), (float)(viewport.Width) / (float)(viewport.Height), 0.1F, 10.0F)
-            * glm::lookAt(glm::vec3(0.0F, 0.0F, -5.0F), glm::vec3(0.0F, 0.0F, 0.0F), glm::vec3(0.0F, 1.0F, 0.0F));
+        sceneData.cameraPosition = camera.position;
+        sceneData.viewproject = camera.viewproject();
         sceneData.model = glm::identity<glm::mat4>();
         sceneData.normal = glm::mat4(glm::transpose(glm::inverse(glm::mat3(sceneData.model))));
 

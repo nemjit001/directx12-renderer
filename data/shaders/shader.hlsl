@@ -17,6 +17,7 @@ struct PSInput
 
 cbuffer SceneData : register(b0)
 {
+    float3 cameraPosition;
     float4x4 viewproject;
     float4x4 model;
     float4x4 normal;
