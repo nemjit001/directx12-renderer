@@ -65,21 +65,22 @@ PSInput VSForward(VSInput input)
 float4 PSForward(PSInput input) : SV_TARGET0
 {    
     float3 color = pow(colorTexture.Sample(textureSampler, input.texCoord).rgb, 2.2); // Convert from SRGB to linear colors    
-    float3 normal = pow(normalTexture.Sample(textureSampler, input.texCoord).rgb, 2.2); // Convert from SRGB to linear colors;
-    normal.y *= -1; // Flip y for OpenGL -> DirectX conversion
-    normal = 2.0 * normal - 1.0;
+    float3 normal = pow(normalTexture.Sample(textureSampler, input.texCoord).rgb, 2.2); // Convert from SRGB to linear colors
+    normal.y *= -1.0;
+    normal = (2.0 * normal) - 1.0;
  
-    float3 L = calcSunDir();
+    float3 L = normalize(calcSunDir());
     float3 V = normalize(cameraPosition - input.vertexPos);
     float3 H = normalize(L + V);
-    float3 N = normalize(mul(input.TBN, float3(0, 1, 0)));
+    float3 N = normalize(mul(normal, input.TBN));
     
     float NoL = saturate(dot(N, L));
     float NoH = saturate(dot(N, H));
     
     float3 diffuse = NoL * color;
-    float3 specular = pow(NoH, 16.0F);
+    float3 specular = pow(NoH, 32.0F);
     float3 outColor = diffuse + specular;
     
-    return float4(0.5 + 0.5 * N, 1.0);
+    return float4(outColor, 1.0);
+
 }

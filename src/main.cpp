@@ -78,7 +78,7 @@ namespace Engine
     {
         alignas(4) float azimuth;
         alignas(4) float zenith;
-        alignas(4) glm::vec3 cameraPosition;
+        alignas(16) glm::vec3 cameraPosition;
         alignas(16) glm::mat4 viewproject;
         alignas(16) glm::mat4 model;
         alignas(16) glm::mat4 normal;
@@ -729,8 +729,8 @@ namespace Engine
         graphicsPipelineDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
         graphicsPipelineDesc.SampleMask = UINT32_MAX;
         graphicsPipelineDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-        graphicsPipelineDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-        graphicsPipelineDesc.RasterizerState.FrontCounterClockwise = FALSE;
+        graphicsPipelineDesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+        graphicsPipelineDesc.RasterizerState.FrontCounterClockwise = TRUE;
         graphicsPipelineDesc.RasterizerState.DepthBias = 0;
         graphicsPipelineDesc.RasterizerState.DepthBiasClamp = 0.0F;
         graphicsPipelineDesc.RasterizerState.SlopeScaledDepthBias = 0.0F;
