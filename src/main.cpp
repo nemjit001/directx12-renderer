@@ -799,7 +799,7 @@ namespace Engine
         camera.aspectRatio = static_cast<float>(DefaultWindowWidth) / static_cast<float>(DefaultWindowHeight);
 
         // Load mesh data
-        if (!D3D12Helpers::loadOBJ("../data/assets/suzanne.obj", mesh))
+        if (!D3D12Helpers::loadOBJ("../data/assets/cube.obj", mesh))
         {
             printf("Mesh load failed\n");
             return false;
