@@ -976,7 +976,11 @@ namespace Engine
         // Update render data
         sceneData.cameraPosition = camera.position;
         sceneData.viewproject = camera.viewproject();
-        sceneData.model = glm::identity<glm::mat4>();
+        sceneData.model = glm::rotate(
+            glm::identity<glm::mat4>(),
+            (float)glm::radians(frameTimer.timeSinceStartMS() * 1.0F * frameTimer.deltaTimeMS()),
+            glm::vec3(0.0F, 1.0F, 0.0F)
+        );
         sceneData.normal = glm::mat4(glm::transpose(glm::inverse(glm::mat3(sceneData.model))));
 
         // Upload render data to GPU visible buffers

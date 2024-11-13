@@ -15,7 +15,10 @@ public:
 
 	double deltaTimeMS();
 
+	double timeSinceStartMS();
+
 private:
-	TimePoint m_current = Clock::now();
+	TimePoint m_start = Clock::now();
+	TimePoint m_current = m_start;
 	TimePoint m_last = m_current;
 };

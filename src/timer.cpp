@@ -17,3 +17,9 @@ double Timer::deltaTimeMS()
 	Duration delta = m_current - m_last;
 	return delta.count();
 }
+
+double Timer::timeSinceStartMS()
+{
+	Duration delta = m_current - m_start;
+	return delta.count();
+}
