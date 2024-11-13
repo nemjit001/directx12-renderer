@@ -974,11 +974,13 @@ namespace Engine
         ImGui::Render();
 
         // Update render data
+        float angle = frameTimer.timeSinceStartMS() / 100.0F;
+
         sceneData.cameraPosition = camera.position;
         sceneData.viewproject = camera.viewproject();
         sceneData.model = glm::rotate(
             glm::identity<glm::mat4>(),
-            (float)glm::radians(frameTimer.timeSinceStartMS() * 1.0F * frameTimer.deltaTimeMS()),
+            (float)glm::radians(angle),
             glm::vec3(0.0F, 1.0F, 0.0F)
         );
         sceneData.normal = glm::mat4(glm::transpose(glm::inverse(glm::mat3(sceneData.model))));
