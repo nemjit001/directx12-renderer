@@ -15,7 +15,6 @@ DirectX 12 toy renderer written in C++. Loosely based on the [directx graphics s
 - [ ] Lights
 	- [ ] Sun based shadow mapping
 	- [ ] Point lights
-	- [ ] Emssive surfaces
 - [ ] PBR pipeline
 - [ ] Transparency
 
