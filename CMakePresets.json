@@ -1,0 +1,36 @@
+{
+  "version": 7,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 14,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default Configuration",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/out/${presetName}"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "displayName": "Release",
+      "configuration": "Release",
+      "configurePreset": "default"
+    },
+    {
+      "name": "release-debug",
+      "displayName": "Release (Debug Info)",
+      "configuration": "RelWithDebInfo",
+      "configurePreset": "default"
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "configuration": "Debug",
+      "configurePreset": "default"
+    }
+  ]
+}

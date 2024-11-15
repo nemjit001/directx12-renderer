@@ -701,8 +701,8 @@ namespace Engine
         compileFlags |= D3DCOMPILE_DEBUG
             | D3DCOMPILE_SKIP_OPTIMIZATION;
 #endif
-        if (FAILED(D3DCompileFromFile(L"../data/shaders/shader.hlsl", nullptr, nullptr, "VSForward", "vs_5_0", compileFlags, 0, &vertexShader, &shaderError))
-            || FAILED(D3DCompileFromFile(L"../data/shaders/shader.hlsl", nullptr, nullptr, "PSForward", "ps_5_0", compileFlags, 0, &pixelShader, &shaderError)))
+        if (FAILED(D3DCompileFromFile(L"data/shaders/shader.hlsl", nullptr, nullptr, "VSForward", "vs_5_0", compileFlags, 0, &vertexShader, &shaderError))
+            || FAILED(D3DCompileFromFile(L"data/shaders/shader.hlsl", nullptr, nullptr, "PSForward", "ps_5_0", compileFlags, 0, &pixelShader, &shaderError)))
         {
             printf("D3D12 shader compilation failed\n");
             if (shaderError != nullptr) {
@@ -799,19 +799,19 @@ namespace Engine
         camera.aspectRatio = static_cast<float>(DefaultWindowWidth) / static_cast<float>(DefaultWindowHeight);
 
         // Load mesh data
-        if (!D3D12Helpers::loadOBJ("../data/assets/cube.obj", mesh))
+        if (!D3D12Helpers::loadOBJ("data/assets/cube.obj", mesh))
         {
             printf("Mesh load failed\n");
             return false;
         }
 
         // Load material data
-        if (!D3D12Helpers::loadTexture("../data/assets/brickwall.jpg", &colorTexture)) {
+        if (!D3D12Helpers::loadTexture("data/assets/brickwall.jpg", &colorTexture)) {
             printf("Color map load failed\n");
             return false;
         }
 
-        if (!D3D12Helpers::loadTexture("../data/assets/brickwall_normal.jpg", &normalTexture)) {
+        if (!D3D12Helpers::loadTexture("data/assets/brickwall_normal.jpg", &normalTexture)) {
             printf("Normal map load failed\n");
             return false;
         }
