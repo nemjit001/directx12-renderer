@@ -107,7 +107,7 @@ namespace Engine
     ComPtr<ID3D12CommandQueue> commandQueue;
     uint32_t rtvHeapIncrementSize = 0;
     uint32_t dsvHeapIncrementSize = 0;
-    uint32_t cbvHeapIncrementSize = 0; //< also for SRVs & UAVs
+    uint32_t cbvsrvHeapIncrementSize = 0;
 
     BOOL tearingSupport = FALSE;
     ComPtr<IDXGISwapChain4> swapchain;
@@ -504,7 +504,7 @@ namespace Engine
         // Get descriptor increment sizes
         rtvHeapIncrementSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         dsvHeapIncrementSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
-        cbvHeapIncrementSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        cbvsrvHeapIncrementSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
         // Create swap chain
         SDL_SysWMinfo wmInfo{};
@@ -642,11 +642,13 @@ namespace Engine
         CD3DX12_DESCRIPTOR_RANGE1 textureDataDescriptorRange;
         textureDataDescriptorRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
 
-        CD3DX12_ROOT_PARAMETER1 sceneDataParam;
-        sceneDataParam.InitAsDescriptorTable(1, &sceneDataDescriptorRange, D3D12_SHADER_VISIBILITY_ALL);
+        CD3DX12_ROOT_PARAMETER1 vsRootParameter;
+        D3D12_DESCRIPTOR_RANGE1 vsRanges[] = { sceneDataDescriptorRange };
+        vsRootParameter.InitAsDescriptorTable(sizeof_array(vsRanges), vsRanges, D3D12_SHADER_VISIBILITY_VERTEX);
 
-        CD3DX12_ROOT_PARAMETER1 textureDataParam;
-        textureDataParam.InitAsDescriptorTable(1, &textureDataDescriptorRange, D3D12_SHADER_VISIBILITY_PIXEL);
+        CD3DX12_ROOT_PARAMETER1 psRootParameter;
+        D3D12_DESCRIPTOR_RANGE1 psRanges[] = { sceneDataDescriptorRange, textureDataDescriptorRange };
+        psRootParameter.InitAsDescriptorTable(sizeof_array(psRanges), psRanges, D3D12_SHADER_VISIBILITY_PIXEL);
 
         D3D12_STATIC_SAMPLER_DESC textureSamplerDesc{};
         textureSamplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -663,7 +665,7 @@ namespace Engine
         textureSamplerDesc.RegisterSpace = 0;
         textureSamplerDesc.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        D3D12_ROOT_PARAMETER1 rootParameters[] = { sceneDataParam, textureDataParam };
+        D3D12_ROOT_PARAMETER1 rootParameters[] = { vsRootParameter, psRootParameter, };
         D3D12_STATIC_SAMPLER_DESC staticSamplers[] = { textureSamplerDesc };
         D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc{};
         rootSignatureDesc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
@@ -792,7 +794,7 @@ namespace Engine
         }
 
         D3D12_CONSTANT_BUFFER_VIEW_DESC sceneDataBufferView = D3D12_CONSTANT_BUFFER_VIEW_DESC{ sceneDataBuffer->GetGPUVirtualAddress(), sceneDataBufferSize };
-        device->CreateConstantBufferView(&sceneDataBufferView, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 0, cbvHeapIncrementSize));
+        device->CreateConstantBufferView(&sceneDataBufferView, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 0, cbvsrvHeapIncrementSize));
 
         // Set camera params
         camera.position = glm::vec3(0.0F, 0.0F, -5.0F);
@@ -825,7 +827,7 @@ namespace Engine
         colorTextureViewDesc.Texture2D.MipLevels = 1;
         colorTextureViewDesc.Texture2D.PlaneSlice = 0;
         colorTextureViewDesc.Texture2D.ResourceMinLODClamp = 0.0F;
-        device->CreateShaderResourceView(colorTexture.Get(), &colorTextureViewDesc, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 1, cbvHeapIncrementSize));
+        device->CreateShaderResourceView(colorTexture.Get(), &colorTextureViewDesc, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 1, cbvsrvHeapIncrementSize));
 
         D3D12_SHADER_RESOURCE_VIEW_DESC normalTextureViewDesc{};
         normalTextureViewDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -835,7 +837,7 @@ namespace Engine
         normalTextureViewDesc.Texture2D.MipLevels = 1;
         normalTextureViewDesc.Texture2D.PlaneSlice = 0;
         normalTextureViewDesc.Texture2D.ResourceMinLODClamp = 0.0F;
-        device->CreateShaderResourceView(normalTexture.Get(), &normalTextureViewDesc, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 2, cbvHeapIncrementSize));
+        device->CreateShaderResourceView(normalTexture.Get(), &normalTextureViewDesc, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 2, cbvsrvHeapIncrementSize));
 
         D3D12Helpers::waitForGPU(commandQueue.Get(), fenceEvent, fenceValue); //< wait for GPU queue just to be sure all uploads are finished
         printf("Initialized DX12 Renderer\n");
@@ -974,7 +976,7 @@ namespace Engine
         ImGui::Render();
 
         // Update render data
-        float angle = frameTimer.timeSinceStartMS() / 100.0F;
+        float angle = (float)frameTimer.timeSinceStartMS() / 100.0F;
 
         sceneData.cameraPosition = camera.position;
         sceneData.viewproject = camera.viewproject();
@@ -1032,8 +1034,8 @@ namespace Engine
 
             // Set root signature
             commandList->SetGraphicsRootSignature(rootSignature.Get());
-            commandList->SetGraphicsRootDescriptorTable(0, CD3DX12_GPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetGPUDescriptorHandleForHeapStart(), 0, cbvHeapIncrementSize));
-            commandList->SetGraphicsRootDescriptorTable(1, CD3DX12_GPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetGPUDescriptorHandleForHeapStart(), 1, cbvHeapIncrementSize));
+            commandList->SetGraphicsRootDescriptorTable(0, descriptorResourceHeap->GetGPUDescriptorHandleForHeapStart());
+            commandList->SetGraphicsRootDescriptorTable(1, descriptorResourceHeap->GetGPUDescriptorHandleForHeapStart());
 
             // Set pipeline state
             commandList->SetPipelineState(graphicsPipeline.Get());
