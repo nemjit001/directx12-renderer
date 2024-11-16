@@ -1,3 +1,7 @@
+
+#define INV_GAMMA   2.2
+#define GAMMA       1.0 / INV_GAMMA
+
 struct VSInput
 {
     float3 position : POSITION0;
@@ -47,22 +51,21 @@ PSInput VSForward(VSInput input)
     result.vertexPos = position.xyz / position.w;
     result.color = input.color;
     result.texCoord = input.texCoord;
-    result.TBN = float3x3(T, B, N);
+    result.TBN = transpose(float3x3(T, B, N));
     
     return result;
 }
 
 float4 PSForward(PSInput input) : SV_TARGET0
 {    
-    float3 color = pow(colorTexture.Sample(textureSampler, input.texCoord).rgb, 2.2); // Convert from SRGB to linear colors    
-    float3 normal = pow(normalTexture.Sample(textureSampler, input.texCoord).rgb, 2.2); // Convert from SRGB to linear colors
-    normal.y *= -1.0;
+    float3 color = pow(colorTexture.Sample(textureSampler, input.texCoord).rgb, INV_GAMMA); // Convert from SRGB to linear colors    
+    float3 normal = normalTexture.Sample(textureSampler, input.texCoord).rgb; // Assume normals stored in linear format
     normal = (2.0 * normal) - 1.0;
  
     float3 L = normalize(sunDirection);
     float3 V = normalize(cameraPosition - input.vertexPos);
     float3 H = normalize(L + V);
-    float3 N = normalize(mul(normal, input.TBN));
+    float3 N = normalize(mul(input.TBN, normal));
     
     float NoL = saturate(dot(N, L));
     float NoH = saturate(dot(N, H));

@@ -43,5 +43,5 @@ endif()
 
 add_custom_target(RendererCopyData ALL
 	COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/data/" "$<TARGET_FILE_DIR:DX12Renderer>/data/"
-	COMMENT "Renderer: Copying data files..."
+	COMMENT "DX12Renderer: Copying data files ${CMAKE_SOURCE_DIR}/data/ -> $<TARGET_FILE_DIR:DX12Renderer>/data/"
 )

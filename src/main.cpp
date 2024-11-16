@@ -2,13 +2,9 @@
 #include <cstdio>
 #include <vector>
 
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#define GLM_FORCE_RADIANS
 #define SDL_MAIN_HANDLED
 #define STB_IMAGE_IMPLEMENTATION
 #define TINYOBJLOADER_IMPLEMENTATION
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_dx12.h>
@@ -26,6 +22,7 @@
 #include <directx/d3dx12.h>
 #include <d3dcompiler.h>
 
+#include "math.hpp"
 #include "timer.hpp"
 
 #define sizeof_array(val)   (sizeof((val)) / sizeof((val)[0]))
@@ -44,7 +41,7 @@ namespace Engine
         glm::vec2 texCoord;
     };
 
-    /// @brief Camera data (transform + project)
+    /// @brief Camera data.
     struct Camera
     {
         glm::vec3 position = glm::vec3(0.0F);
@@ -59,6 +56,21 @@ namespace Engine
         glm::mat4 viewproject()
         {
             return glm::perspective(glm::radians(FOVy), aspectRatio, zNear, zFar) * glm::lookAt(position, position + forward, up);
+        }
+    };
+
+    /// @brief Simple TRS transform.
+    struct Transform
+    {
+        glm::vec3 position = glm::vec3(0.0F);
+        glm::quat rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F);
+        glm::vec3 scale = glm::vec3(1.0F);
+
+        glm::mat4 matrix()
+        {
+            return glm::translate(glm::identity<glm::mat4>(), position)
+                * glm::mat4_cast(rotation)
+                * glm::scale(glm::identity<glm::mat4>(), scale);
         }
     };
 
@@ -134,6 +146,7 @@ namespace Engine
 
     // Scene objects
     Camera camera;
+    Transform transform;
     Mesh mesh;
 
     // Material data
@@ -802,8 +815,11 @@ namespace Engine
         camera.forward = glm::normalize(glm::vec3(0.0F) - camera.position);
         camera.aspectRatio = static_cast<float>(DefaultWindowWidth) / static_cast<float>(DefaultWindowHeight);
 
+        // Set transform state
+        transform = Transform{};
+
         // Load mesh data
-        if (!D3D12Helpers::loadOBJ("data/assets/cube.obj", mesh))
+        if (!D3D12Helpers::loadOBJ("data/assets/suzanne.obj", mesh))
         {
             printf("Mesh load failed\n");
             return false;
@@ -969,6 +985,7 @@ namespace Engine
             ImGui::SeparatorText("Statistics");
             ImGui::Text("Frame time: %10.2f ms", frameTimer.deltaTimeMS());
             ImGui::Text("FPS:        %10.2f fps", 1'000.0 / frameTimer.deltaTimeMS());
+
             ImGui::SeparatorText("Scene");
             ImGui::DragFloat("Sun Azimuth", &sunAzimuth, 1.0F, 0.0F, 360.0F);
             ImGui::DragFloat("Sun Zenith", &sunZenith, 1.0F, -90.0F, 90.0F);
@@ -977,24 +994,23 @@ namespace Engine
 
         ImGui::Render();
 
-        // Update render data
-        float angle = (float)frameTimer.timeSinceStartMS() / 100.0F;
+        // Update camera data
         camera.position = glm::vec3(2.0F, 2.0F, -5.0F);
         camera.forward = glm::normalize(glm::vec3(0.0F) - camera.position);
 
-        sceneData.sunDirection = glm::normalize(glm::vec3(
-            glm::cos(glm::radians(sunAzimuth)) * glm::sin(glm::radians(sunZenith)),
-            glm::cos(glm::radians(sunZenith)),
-            glm::sin(glm::radians(sunAzimuth)) * glm::sin(glm::radians(sunZenith))
-        ));
+        // Update transform data
+        transform.rotation = glm::rotate(transform.rotation, (float)frameTimer.deltaTimeMS() / 1000.0F, glm::vec3(0.0F, 1.0F, 0.0F));
+
+        // Update scene data
+        sceneData.sunDirection = glm::normalize(glm::vec3{
+            glm::cos(glm::radians(sunAzimuth)) * glm::sin(glm::radians(90.0F - sunZenith)),
+            glm::cos(glm::radians(90.0F - sunZenith)),
+            glm::sin(glm::radians(sunAzimuth))* glm::sin(glm::radians(90.0F - sunZenith)),
+        });
         sceneData.cameraPosition = camera.position;
         sceneData.viewproject = camera.viewproject();
-        sceneData.model = glm::rotate(
-            glm::identity<glm::mat4>(),
-            glm::radians(angle),
-            glm::vec3(0.0F, 1.0F, 0.0F)
-        );
-        sceneData.normal = glm::mat4(glm::transpose(glm::inverse(glm::mat3(sceneData.model))));
+        sceneData.model = transform.matrix();
+        sceneData.normal = glm::mat4(glm::inverse(glm::transpose(glm::mat3(sceneData.model))));
 
         // Upload render data to GPU visible buffers
         D3D12_RANGE readRange = CD3DX12_RANGE(0, 0);
