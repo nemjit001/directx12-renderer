@@ -76,9 +76,8 @@ namespace Engine
     /// @brief Scene constant buffer data.
     struct alignas(256) SceneData
     {
-        alignas(4) float azimuth;
-        alignas(4) float zenith;
-        alignas(16) glm::vec3 cameraPosition;
+        alignas(4) glm::vec3 sunDirection;
+        alignas(4) glm::vec3 cameraPosition;
         alignas(16) glm::mat4 viewproject;
         alignas(16) glm::mat4 model;
         alignas(16) glm::mat4 normal;
@@ -142,6 +141,8 @@ namespace Engine
     ComPtr<ID3D12Resource> normalTexture;
 
     // CPU side renderer data
+    float sunAzimuth = 0.0F;
+    float sunZenith = 0.0F;
     SceneData sceneData = SceneData{};
 
     namespace D3D12Helpers
@@ -798,6 +799,7 @@ namespace Engine
 
         // Set camera params
         camera.position = glm::vec3(0.0F, 0.0F, -5.0F);
+        camera.forward = glm::normalize(glm::vec3(0.0F) - camera.position);
         camera.aspectRatio = static_cast<float>(DefaultWindowWidth) / static_cast<float>(DefaultWindowHeight);
 
         // Load mesh data
@@ -968,8 +970,8 @@ namespace Engine
             ImGui::Text("Frame time: %10.2f ms", frameTimer.deltaTimeMS());
             ImGui::Text("FPS:        %10.2f fps", 1'000.0 / frameTimer.deltaTimeMS());
             ImGui::SeparatorText("Scene");
-            ImGui::DragFloat("Sun Azimuth", &sceneData.azimuth, 1.0F, 0.0F, 360.0F);
-            ImGui::DragFloat("Sun Zenith", &sceneData.zenith, 1.0F, -90.0F, 90.0F);
+            ImGui::DragFloat("Sun Azimuth", &sunAzimuth, 1.0F, 0.0F, 360.0F);
+            ImGui::DragFloat("Sun Zenith", &sunZenith, 1.0F, -90.0F, 90.0F);
         }
         ImGui::End();
 
@@ -977,12 +979,19 @@ namespace Engine
 
         // Update render data
         float angle = (float)frameTimer.timeSinceStartMS() / 100.0F;
+        camera.position = glm::vec3(2.0F, 2.0F, -5.0F);
+        camera.forward = glm::normalize(glm::vec3(0.0F) - camera.position);
 
+        sceneData.sunDirection = glm::normalize(glm::vec3(
+            glm::cos(glm::radians(sunAzimuth)) * glm::sin(glm::radians(sunZenith)),
+            glm::cos(glm::radians(sunZenith)),
+            glm::sin(glm::radians(sunAzimuth)) * glm::sin(glm::radians(sunZenith))
+        ));
         sceneData.cameraPosition = camera.position;
         sceneData.viewproject = camera.viewproject();
         sceneData.model = glm::rotate(
             glm::identity<glm::mat4>(),
-            (float)glm::radians(angle),
+            glm::radians(angle),
             glm::vec3(0.0F, 1.0F, 0.0F)
         );
         sceneData.normal = glm::mat4(glm::transpose(glm::inverse(glm::mat3(sceneData.model))));

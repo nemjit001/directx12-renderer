@@ -18,8 +18,7 @@ struct PSInput
 
 cbuffer SceneData : register(b0)
 {
-    float azimuth;
-    float zenith;
+    float3 sunDirection;
     float3 cameraPosition;
     float4x4 viewproject;
     float4x4 model;
@@ -29,15 +28,6 @@ cbuffer SceneData : register(b0)
 Texture2D colorTexture : register(t0);
 Texture2D normalTexture : register(t1);
 SamplerState textureSampler : register(s0);
-
-float3 calcSunDir()
-{
-    float alpha = radians(azimuth);
-    float beta = radians(zenith);
-    float3 dir = float3(cos(alpha), 0.0, sin(alpha)); // TODO(nemjit001): use zenith with rotation around X
-    
-    return normalize(dir);
-}
 
 PSInput VSForward(VSInput input)
 {
@@ -69,7 +59,7 @@ float4 PSForward(PSInput input) : SV_TARGET0
     normal.y *= -1.0;
     normal = (2.0 * normal) - 1.0;
  
-    float3 L = normalize(calcSunDir());
+    float3 L = normalize(sunDirection);
     float3 V = normalize(cameraPosition - input.vertexPos);
     float3 H = normalize(L + V);
     float3 N = normalize(mul(normal, input.TBN));
