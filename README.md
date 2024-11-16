@@ -2,6 +2,8 @@
 
 DirectX 12 toy renderer written in C++. Loosely based on the [directx graphics samples](https://github.com/microsoft/DirectX-Graphics-Samples).
 
+Sister repository to [vulkan-renderer](https://github.com/nemjit001/vulkan-renderer), in which the same (or similar) capabilities are implemented using Vulkan.
+
 ## Features
 
 - [X] OBJ mesh loading
