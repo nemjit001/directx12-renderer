@@ -97,11 +97,14 @@ namespace Engine
     /// @brief Scene constant buffer data.
     struct alignas(256) SceneData
     {
-        alignas(4) glm::vec3 sunDirection;
-        alignas(4) glm::vec3 cameraPosition;
+        alignas(16) glm::vec3 sunDirection;
+        alignas(16) glm::vec3 sunColor;
+        alignas(16) glm::vec3 ambientLight;
+        alignas(16) glm::vec3 cameraPosition;
         alignas(16) glm::mat4 viewproject;
         alignas(16) glm::mat4 model;
         alignas(16) glm::mat4 normal;
+        alignas(16) float specularity;
     };
 
     constexpr char const* WindowTitle = "DX12 Renderer";
@@ -137,6 +140,9 @@ namespace Engine
     // CPU side renderer data
     float sunAzimuth = 0.0F;
     float sunZenith = 0.0F;
+    glm::vec3 sunColor = glm::vec3(1.0F);
+    glm::vec3 ambientLight = glm::vec3(0.1F);
+    float specularity = 0.5F;
     SceneData sceneData = SceneData{};
 
     namespace D3D12Helpers
@@ -343,9 +349,10 @@ namespace Engine
         IMGUI_CHECKVERSION();
 
         ImGui::CreateContext();
-        ImGui::StyleColorsDark();
         ImGuiIO& io = ImGui::GetIO(); (void)(io);
         io.IniFilename = nullptr;
+
+        ImGui::StyleColorsDark();
 
         if (SDL_Init(SDL_INIT_VIDEO) != 0)
         {
@@ -556,7 +563,7 @@ namespace Engine
         D3D12_CONSTANT_BUFFER_VIEW_DESC sceneDataBufferView = D3D12_CONSTANT_BUFFER_VIEW_DESC{ sceneDataBuffer->GetGPUVirtualAddress(), sceneDataBufferSize };
         Renderer::device->CreateConstantBufferView(&sceneDataBufferView, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 0, Renderer::cbvsrvHeapIncrementSize));
 
-        // Set camera params
+        // Set camera state
         camera.position = glm::vec3(0.0F, 0.0F, -5.0F);
         camera.forward = glm::normalize(glm::vec3(0.0F) - camera.position);
         camera.aspectRatio = static_cast<float>(DefaultWindowWidth) / static_cast<float>(DefaultWindowHeight);
@@ -639,6 +646,7 @@ namespace Engine
 
         printf("Window resized (%d x %d)\n", width, height);
 
+        // Update renderer swap resources
         Renderer::waitForGPU();
         if (!Renderer::resizeSwapResources(static_cast<uint32_t>(width), static_cast<uint32_t>(height)))
         {
@@ -694,9 +702,19 @@ namespace Engine
             ImGui::Text("Frame time: %10.2f ms", frameTimer.deltaTimeMS());
             ImGui::Text("FPS:        %10.2f fps", 1'000.0 / frameTimer.deltaTimeMS());
 
+            ImGui::SeparatorText("Settings");
+            ImGui::RadioButton("VSync Enabled", true);
+            ImGui::RadioButton("VSync Disabled", false);
+            ImGui::RadioButton("VSync Disabled with tearing", false);
+
             ImGui::SeparatorText("Scene");
             ImGui::DragFloat("Sun Azimuth", &sunAzimuth, 1.0F, 0.0F, 360.0F);
             ImGui::DragFloat("Sun Zenith", &sunZenith, 1.0F, -90.0F, 90.0F);
+            ImGui::ColorEdit3("Sun Color", &sunColor[0], ImGuiColorEditFlags_DisplayHex | ImGuiColorEditFlags_InputRGB);
+            ImGui::ColorEdit3("Ambient Light", &ambientLight[0], ImGuiColorEditFlags_DisplayHex | ImGuiColorEditFlags_InputRGB);
+
+            ImGui::SeparatorText("Material");
+            ImGui::DragFloat("Specularity", &specularity, 0.01F, 0.0F, 1.0F);
         }
         ImGui::End();
 
@@ -715,10 +733,13 @@ namespace Engine
             glm::cos(glm::radians(90.0F - sunZenith)),
             glm::sin(glm::radians(sunAzimuth))* glm::sin(glm::radians(90.0F - sunZenith)),
         });
+        sceneData.sunColor = sunColor;
+        sceneData.ambientLight = ambientLight;
         sceneData.cameraPosition = camera.position;
         sceneData.viewproject = camera.viewproject();
         sceneData.model = transform.matrix();
         sceneData.normal = glm::mat4(glm::inverse(glm::transpose(glm::mat3(sceneData.model))));
+        sceneData.specularity = specularity;
 
         // Upload render data to GPU visible buffers
         D3D12_RANGE readRange = CD3DX12_RANGE(0, 0);
@@ -756,7 +777,7 @@ namespace Engine
             // Get current swap RTV
             CD3DX12_CPU_DESCRIPTOR_HANDLE currentSwapRTV(Renderer::rtvHeap->GetCPUDescriptorHandleForHeapStart(), backbufferIndex, Renderer::rtvHeapIncrementSize);
             CD3DX12_CPU_DESCRIPTOR_HANDLE currentSwapDSV(Renderer::dsvHeap->GetCPUDescriptorHandleForHeapStart(), 0, Renderer::dsvHeapIncrementSize);
-            float const clearColor[] = { 0.1F, 0.1F, 0.1F, 0.1F };
+            float const clearColor[] = { 0.1F, 0.1F, 0.1F, 1.0F };
             Renderer::commandList->OMSetRenderTargets(1, &currentSwapRTV, FALSE, &currentSwapDSV);
             Renderer::commandList->ClearRenderTargetView(currentSwapRTV, clearColor, 0, nullptr);
             Renderer::commandList->ClearDepthStencilView(currentSwapDSV, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0F, 0x00, 0, nullptr);

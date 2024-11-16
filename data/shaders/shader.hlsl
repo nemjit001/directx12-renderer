@@ -23,10 +23,13 @@ struct PSInput
 cbuffer SceneData : register(b0)
 {
     float3 sunDirection;
+    float3 sunColor;
+    float3 ambientLight;
     float3 cameraPosition;
     float4x4 viewproject;
     float4x4 model;
     float4x4 normal;
+    float specularity;
 };
 
 Texture2D colorTexture : register(t0);
@@ -70,9 +73,10 @@ float4 PSForward(PSInput input) : SV_TARGET0
     float NoL = saturate(dot(N, L));
     float NoH = saturate(dot(N, H));
     
-    float3 diffuse = NoL * color;
-    float3 specular = pow(NoH, 32.0F);
-    float3 outColor = diffuse + specular;
+    float3 ambient = ambientLight * color;
+    float3 diffuse = NoL * color * sunColor;
+    float3 specular = pow(NoH, 64.0F) * sunColor;
+    float3 outColor = ambient + diffuse + specularity * specular; // Blend material based on constant
     
     return float4(outColor, 1.0);
 
