@@ -45,21 +45,26 @@ namespace Engine
     /// @brief Simple TRS transform.
     struct Transform
     {
-        glm::vec3 position = glm::vec3(0.0F);
-        glm::quat rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F);
-        glm::vec3 scale = glm::vec3(1.0F);
-
-        glm::mat4 matrix()
+        glm::mat4 matrix() const
         {
             return glm::translate(glm::identity<glm::mat4>(), position)
                 * glm::mat4_cast(rotation)
                 * glm::scale(glm::identity<glm::mat4>(), scale);
         }
+
+        glm::vec3 position = glm::vec3(0.0F);
+        glm::quat rotation = glm::quat(1.0F, 0.0F, 0.0F, 0.0F);
+        glm::vec3 scale = glm::vec3(1.0F);
     };
 
     /// @brief Virtual camera.
     struct Camera
     {
+        glm::mat4 matrix() const
+        {
+            return glm::perspective(glm::radians(FOVy), aspectRatio, zNear, zFar) * glm::lookAt(position, position + forward, up);
+        }
+
         // Camera transform
         glm::vec3 position = glm::vec3(0.0F);
         glm::vec3 forward = glm::vec3(0.0F, 0.0F, 1.0F);
@@ -70,11 +75,6 @@ namespace Engine
         float aspectRatio = 1.0F;
         float zNear = 0.1F;
         float zFar = 100.0F;
-
-        glm::mat4 viewproject()
-        {
-            return glm::perspective(glm::radians(FOVy), aspectRatio, zNear, zFar) * glm::lookAt(position, position + forward, up);
-        }
     };
 
     /// @brief Mesh data with indexed vertices.
@@ -82,15 +82,13 @@ namespace Engine
     {
         uint32_t vertexCount = 0;
         uint32_t indexCount = 0;
-        ComPtr<ID3D12Resource> vertexBuffer = nullptr;
-        ComPtr<ID3D12Resource> indexBuffer = nullptr;
-        D3D12_VERTEX_BUFFER_VIEW vertexBufferView = {};
-        D3D12_INDEX_BUFFER_VIEW indexBufferView = {};
+        Buffer vertexBuffer{};
+        Buffer indexBuffer{};
 
         void Mesh::destroy()
         {
-            indexBuffer.Reset();
-            vertexBuffer.Reset();
+            indexBuffer.destroy();
+            vertexBuffer.destroy();
         }
     };
 
@@ -113,29 +111,29 @@ namespace Engine
 
     bool isRunning = true;
     SDL_Window* window = nullptr;
-    Timer frameTimer;
+    Timer frameTimer{};
 
     // ImGui Heap
-    ComPtr<ID3D12DescriptorHeap> ImGuiSRVHeap; //< SRV heap specifically for ImGUI usage
+    ComPtr<ID3D12DescriptorHeap> ImGuiSRVHeap = nullptr; //< SRV heap specifically for ImGUI usage
 
     // Per pass data
-    ComPtr<ID3D12RootSignature> rootSignature; //< determines shader bind points
-    ComPtr<ID3D12PipelineState> graphicsPipeline; //< determines pipeline stages & programming
-    D3D12_VIEWPORT viewport;
-    D3D12_RECT scissor;
+    ComPtr<ID3D12RootSignature> rootSignature = nullptr; //< determines shader bind points
+    ComPtr<ID3D12PipelineState> graphicsPipeline = nullptr; //< determines pipeline stages & programming
+    D3D12_VIEWPORT viewport{};
+    D3D12_RECT scissor{};
 
     // Per scene data
-    ComPtr<ID3D12DescriptorHeap> descriptorResourceHeap;
-    ComPtr<ID3D12Resource> sceneDataBuffer;
+    ComPtr<ID3D12DescriptorHeap> descriptorResourceHeap = nullptr;
+    Buffer sceneDataBuffer{};
 
     // Scene objects
-    Camera camera;
-    Transform transform;
-    Mesh mesh;
+    Camera camera{};
+    Transform transform{};
+    Mesh mesh{};
 
     // Material data
-    ComPtr<ID3D12Resource> colorTexture;
-    ComPtr<ID3D12Resource> normalTexture;
+    Texture colorTexture{};
+    Texture normalTexture{};
 
     // CPU side renderer data
     float sunAzimuth = 0.0F;
@@ -153,53 +151,28 @@ namespace Engine
             assert(pIndices != nullptr);
             assert(vertexCount > 0);
             assert(indexCount > 0);
-
-            mesh = Mesh{};
-            mesh.vertexCount = vertexCount;
-            mesh.indexCount = indexCount;
+         
             uint32_t const vertexBufferSize = vertexCount * sizeof(Vertex);
             uint32_t const indexBufferSize = indexCount * sizeof(uint32_t);
 
-            D3D12_RESOURCE_DESC vertexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
-            D3D12_HEAP_PROPERTIES vertexBufferHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-            if (FAILED(Renderer::device->CreateCommittedResource(&vertexBufferHeap, D3D12_HEAP_FLAG_NONE, &vertexBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&mesh.vertexBuffer))))
-            {
-                printf("D3D12 vertex buffer create failed\n");
+            mesh.vertexCount = vertexCount;
+            mesh.indexCount = indexCount;
+
+            if (!Renderer::createBuffer(mesh.vertexBuffer, vertexBufferSize, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_HEAP_TYPE_UPLOAD)) {
                 return false;
             }
 
-            D3D12_RESOURCE_DESC indexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
-            D3D12_HEAP_PROPERTIES indexBufferHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-            if (FAILED(Renderer::device->CreateCommittedResource(&indexBufferHeap, D3D12_HEAP_FLAG_NONE, &indexBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&mesh.indexBuffer))))
-            {
-                printf("D3D12 index buffer create failed\n");
+            if (!Renderer::createBuffer(mesh.indexBuffer, indexBufferSize, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_HEAP_TYPE_UPLOAD)) {
                 return false;
             }
 
-            D3D12_RANGE vertexReadRange = CD3DX12_RANGE(0, 0);
-            void* pVertexData = nullptr;
-            if (FAILED(mesh.vertexBuffer->Map(0, &vertexReadRange, &pVertexData)))
-            {
-                printf("D3D12 vertex buffer map failed\n");
-                return false;
-            }
+            mesh.vertexBuffer.map();
+            memcpy(mesh.vertexBuffer.pData, pVertices, vertexBufferSize);
+            mesh.vertexBuffer.unmap();
 
-            memcpy(pVertexData, pVertices, vertexBufferSize);
-            mesh.vertexBuffer->Unmap(0, nullptr);
-
-            D3D12_RANGE indexReadRange = CD3DX12_RANGE(0, 0);
-            void* pIndexData = nullptr;
-            if (FAILED(mesh.indexBuffer->Map(0, &indexReadRange, &pIndexData)))
-            {
-                printf("D3D12 index buffer map failed\n");
-                return false;
-            }
-
-            memcpy(pIndexData, pIndices, indexBufferSize);
-            mesh.indexBuffer->Unmap(0, nullptr);
-
-            mesh.vertexBufferView = D3D12_VERTEX_BUFFER_VIEW{ mesh.vertexBuffer->GetGPUVirtualAddress(), vertexBufferSize, sizeof(Vertex) };
-            mesh.indexBufferView = D3D12_INDEX_BUFFER_VIEW{ mesh.indexBuffer->GetGPUVirtualAddress(), indexBufferSize, DXGI_FORMAT_R32_UINT };
+            mesh.indexBuffer.map();
+            memcpy(mesh.indexBuffer.pData, pIndices, indexBufferSize);
+            mesh.indexBuffer.unmap();
 
             return true;
         }
@@ -271,10 +244,9 @@ namespace Engine
             return createMesh(mesh, vertices.data(), static_cast<uint32_t>(vertices.size()), indices.data(), static_cast<uint32_t>(indices.size()));
         }
 
-        bool loadTexture(char const* path, ID3D12Resource** ppResource)
+        bool loadTexture(char const* path, Texture& texture)
         {
             assert(path != nullptr);
-            assert(ppResource != nullptr);
 
             int texWidth = 0;
             int texHeight = 0;
@@ -287,20 +259,24 @@ namespace Engine
             }
             printf("Loaded texture [%s] (%d x %d x %d)\n", path, texWidth, texHeight, texChannels);
 
-            D3D12_RESOURCE_DESC textureDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R8G8B8A8_UNORM, texWidth, texHeight, 1, 1);
-            D3D12_HEAP_PROPERTIES textureHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-            if (FAILED(Renderer::device->CreateCommittedResource(&textureHeap, D3D12_HEAP_FLAG_NONE, &textureDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(ppResource))))
+            if (!Renderer::createTexture(
+                texture,
+                D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+                DXGI_FORMAT_R8G8B8A8_UNORM,
+                D3D12_RESOURCE_FLAG_NONE,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_HEAP_TYPE_DEFAULT,
+                texWidth, texHeight, 1
+            ))
             {
                 printf("D3D12 texture create failed\n");
                 stbi_image_free(pTextureData);
                 return false;
             }
 
-            uint64_t uploadBufferSize = GetRequiredIntermediateSize(*ppResource, 0, 1);
-            ComPtr<ID3D12Resource> uploadBuffer;
-            D3D12_RESOURCE_DESC uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
-            D3D12_HEAP_PROPERTIES uploadBufferHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-            if (FAILED(Renderer::device->CreateCommittedResource(&uploadBufferHeap, D3D12_HEAP_FLAG_NONE, &uploadBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer))))
+            uint64_t uploadBufferSize = GetRequiredIntermediateSize(texture.handle.Get(), 0, 1);
+            Buffer uploadBuffer{};
+            if (!Renderer::createBuffer(uploadBuffer, uploadBufferSize, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_HEAP_TYPE_UPLOAD))
             {
                 printf("D3D12 texture upload buffer create failed\n");
                 stbi_image_free(pTextureData);
@@ -322,9 +298,9 @@ namespace Engine
                 textureResourceData.RowPitch = texWidth * 4;
                 textureResourceData.SlicePitch = texWidth * texHeight * 4;
 
-                UpdateSubresources(uploadCommandList.Get(), *ppResource, uploadBuffer.Get(), 0, 0, 1, &textureResourceData);
+                UpdateSubresources(uploadCommandList.Get(), texture.handle.Get(), uploadBuffer.handle.Get(), 0, 0, 1, &textureResourceData);
 
-                D3D12_RESOURCE_BARRIER textureUploadBarrier = CD3DX12_RESOURCE_BARRIER::Transition(*ppResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                D3D12_RESOURCE_BARRIER textureUploadBarrier = CD3DX12_RESOURCE_BARRIER::Transition(texture.handle.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                 uploadCommandList->ResourceBarrier(1, &textureUploadBarrier);
                 
                 if (FAILED(uploadCommandList->Close()))
@@ -551,16 +527,13 @@ namespace Engine
         }
 
         // Create scene data buffer
-        uint32_t const sceneDataBufferSize = sizeof(SceneData);
-        D3D12_RESOURCE_DESC sceneDataBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(sceneDataBufferSize);
-        D3D12_HEAP_PROPERTIES sceneDataHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-        if (FAILED(Renderer::device->CreateCommittedResource(&sceneDataHeap, D3D12_HEAP_FLAG_NONE, &sceneDataBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&sceneDataBuffer))))
+        if (!Renderer::createBuffer(sceneDataBuffer, sizeof(SceneData), D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_HEAP_TYPE_UPLOAD, true))
         {
             printf("D3D12 scene data buffer create failed\n");
             return false;
         }
 
-        D3D12_CONSTANT_BUFFER_VIEW_DESC sceneDataBufferView = D3D12_CONSTANT_BUFFER_VIEW_DESC{ sceneDataBuffer->GetGPUVirtualAddress(), sceneDataBufferSize };
+        D3D12_CONSTANT_BUFFER_VIEW_DESC sceneDataBufferView = D3D12_CONSTANT_BUFFER_VIEW_DESC{ sceneDataBuffer.handle->GetGPUVirtualAddress(), static_cast<UINT>(sceneDataBuffer.size) };
         Renderer::device->CreateConstantBufferView(&sceneDataBufferView, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 0, Renderer::cbvsrvHeapIncrementSize));
 
         // Set camera state
@@ -579,36 +552,36 @@ namespace Engine
         }
 
         // Load material data
-        if (!D3D12Helpers::loadTexture("data/assets/brickwall.jpg", &colorTexture)) {
+        if (!D3D12Helpers::loadTexture("data/assets/brickwall.jpg", colorTexture)) {
             printf("Color map load failed\n");
             return false;
         }
 
-        if (!D3D12Helpers::loadTexture("data/assets/brickwall_normal.jpg", &normalTexture)) {
+        if (!D3D12Helpers::loadTexture("data/assets/brickwall_normal.jpg", normalTexture)) {
             printf("Normal map load failed\n");
             return false;
         }
 
         // Create material SRVs
         D3D12_SHADER_RESOURCE_VIEW_DESC colorTextureViewDesc{};
-        colorTextureViewDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        colorTextureViewDesc.Format = colorTexture.format;
         colorTextureViewDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         colorTextureViewDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         colorTextureViewDesc.Texture2D.MostDetailedMip = 0;
-        colorTextureViewDesc.Texture2D.MipLevels = 1;
+        colorTextureViewDesc.Texture2D.MipLevels = colorTexture.levels;
         colorTextureViewDesc.Texture2D.PlaneSlice = 0;
         colorTextureViewDesc.Texture2D.ResourceMinLODClamp = 0.0F;
-        Renderer::device->CreateShaderResourceView(colorTexture.Get(), &colorTextureViewDesc, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 1, Renderer::cbvsrvHeapIncrementSize));
+        Renderer::device->CreateShaderResourceView(colorTexture.handle.Get(), &colorTextureViewDesc, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 1, Renderer::cbvsrvHeapIncrementSize));
 
         D3D12_SHADER_RESOURCE_VIEW_DESC normalTextureViewDesc{};
-        normalTextureViewDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        normalTextureViewDesc.Format = normalTexture.format;
         normalTextureViewDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         normalTextureViewDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         normalTextureViewDesc.Texture2D.MostDetailedMip = 0;
-        normalTextureViewDesc.Texture2D.MipLevels = 1;
+        normalTextureViewDesc.Texture2D.MipLevels = normalTexture.levels;
         normalTextureViewDesc.Texture2D.PlaneSlice = 0;
         normalTextureViewDesc.Texture2D.ResourceMinLODClamp = 0.0F;
-        Renderer::device->CreateShaderResourceView(normalTexture.Get(), &normalTextureViewDesc, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 2, Renderer::cbvsrvHeapIncrementSize));
+        Renderer::device->CreateShaderResourceView(normalTexture.handle.Get(), &normalTextureViewDesc, CD3DX12_CPU_DESCRIPTOR_HANDLE(descriptorResourceHeap->GetCPUDescriptorHandleForHeapStart(), 2, Renderer::cbvsrvHeapIncrementSize));
 
         Renderer::waitForGPU(); // Wait until GPU uploads are finished
         printf("Initialized DX12 Renderer\n");
@@ -621,9 +594,11 @@ namespace Engine
 
         Renderer::waitForGPU();
 
-        normalTexture.Reset();
-        colorTexture.Reset();
+        normalTexture.destroy();
+        colorTexture.destroy();
         mesh.destroy();
+        sceneDataBuffer.unmap();
+        sceneDataBuffer.destroy();
         ImGui_ImplDX12_Shutdown();
 
         Renderer::shutdown();
@@ -737,22 +712,14 @@ namespace Engine
         sceneData.sunColor = sunColor;
         sceneData.ambientLight = ambientLight;
         sceneData.cameraPosition = camera.position;
-        sceneData.viewproject = camera.viewproject();
+        sceneData.viewproject = camera.matrix();
         sceneData.model = transform.matrix();
         sceneData.normal = glm::mat4(glm::inverse(glm::transpose(glm::mat3(sceneData.model))));
         sceneData.specularity = specularity;
 
         // Upload render data to GPU visible buffers
-        D3D12_RANGE readRange = CD3DX12_RANGE(0, 0);
-        void* pSceneData = nullptr;
-        if (FAILED(sceneDataBuffer->Map(0, &readRange, &pSceneData)))
-        {
-            printf("D3D12 scene data map failed\n");
-            isRunning = false;
-        }
-
-        memcpy(pSceneData, &sceneData, sizeof(SceneData));
-        sceneDataBuffer->Unmap(0, nullptr);
+        assert(sceneDataBuffer.mapped);
+        memcpy(sceneDataBuffer.pData, &sceneData, sizeof(SceneData));
     }
 
     void render()
@@ -798,10 +765,13 @@ namespace Engine
             Renderer::commandList->RSSetScissorRects(1, &scissor);
 
             // Draw mesh
-            D3D12_VERTEX_BUFFER_VIEW pVertexBuffers[] = { mesh.vertexBufferView };
+            D3D12_VERTEX_BUFFER_VIEW vertexBufferView = { mesh.vertexBuffer.handle->GetGPUVirtualAddress(), static_cast<uint32_t>(mesh.vertexBuffer.size), sizeof(Vertex) };
+            D3D12_INDEX_BUFFER_VIEW indexBufferView = { mesh.indexBuffer.handle->GetGPUVirtualAddress(), static_cast<uint32_t>(mesh.indexBuffer.size), DXGI_FORMAT_R32_UINT };
+
+            D3D12_VERTEX_BUFFER_VIEW pVertexBuffers[] = { vertexBufferView };
             Renderer::commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             Renderer::commandList->IASetVertexBuffers(0, sizeof_array(pVertexBuffers), pVertexBuffers);
-            Renderer::commandList->IASetIndexBuffer(&mesh.indexBufferView);
+            Renderer::commandList->IASetIndexBuffer(&indexBufferView);
             Renderer::commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
 
             // Draw GUI

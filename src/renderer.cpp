@@ -1,6 +1,40 @@
 #include "renderer.hpp"
 
+#include <cassert>
+
 #include <SDL_syswm.h>
+
+void Buffer::destroy()
+{
+    if (mapped) {
+        unmap();
+    }
+
+    handle.Reset();
+}
+
+void Buffer::map()
+{
+    handle->Map(0, nullptr, &pData);
+    assert(pData != nullptr);
+
+    mapped = true;
+}
+
+void Buffer::unmap()
+{
+    if (!mapped) {
+        return;
+    }
+
+    handle->Unmap(0, nullptr);
+    mapped = false;
+}
+
+void Texture::destroy()
+{
+    handle.Reset();
+}
 
 namespace Renderer
 {
@@ -192,12 +226,20 @@ namespace Renderer
             rtvHandle.Offset(1, rtvHeapIncrementSize);
         }
 
-        D3D12_RESOURCE_DESC depthStencilDesc = CD3DX12_RESOURCE_DESC::Tex2D(SwapDepthStencilFormat, windowWidth, windowHeight, 1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
         D3D12_CLEAR_VALUE depthStencilClearValue = CD3DX12_CLEAR_VALUE(SwapDepthStencilFormat, 1.0F, 0x00);
-        D3D12_HEAP_PROPERTIES depthStencilHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-        if (FAILED(device->CreateCommittedResource(&depthStencilHeap, D3D12_HEAP_FLAG_NONE, &depthStencilDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthStencilClearValue, IID_PPV_ARGS(&depthStencilTarget))))
+        if (!createTexture(
+            depthStencilTarget,
+            D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            SwapDepthStencilFormat,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE,
+            D3D12_HEAP_TYPE_DEFAULT,
+            windowWidth, windowHeight, 1,
+            1, 1, 1, 0,
+            &depthStencilClearValue
+        ))
         {
-            printf("D3D12 create swap depth buffer failed\n");
+            printf("D3D12 swap depth buffer create failed\n");
             return false;
         }
 
@@ -207,7 +249,16 @@ namespace Renderer
         dsvDesc.Texture2D.MipSlice = 0;
 
         CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(dsvHeap->GetCPUDescriptorHandleForHeapStart());
-        device->CreateDepthStencilView(depthStencilTarget.Get(), &dsvDesc, dsvHandle);
+        device->CreateDepthStencilView(depthStencilTarget.handle.Get(), &dsvDesc, dsvHandle);
+
+        // Create synchronization primitives
+        fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))
+            || fenceEvent == nullptr)
+        {
+            printf("D3D12 frame fence create failed\n");
+            return false;
+        }
 
         // Create command allocator & command list
         if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator))))
@@ -223,28 +274,22 @@ namespace Renderer
         }
         commandList->Close(); //< close on create, reset happens in render
 
-        // Create synchronization primitives
-        fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))
-            || fenceEvent == nullptr)
-        {
-            printf("D3D12 frame fence create failed\n");
-            return false;
-        }
-
         return true;
 	}
 
 	void shutdown()
 	{
-        CloseHandle(fenceEvent);
-        fence.Reset();
+        waitForGPU();
+
         commandList.Reset();
         commandAllocator.Reset();
 
+        CloseHandle(fenceEvent);
+        fence.Reset();
+
         dsvHeap.Reset();
         rtvHeap.Reset();
-        depthStencilTarget.Reset();
+        depthStencilTarget.destroy();
         for (UINT i = 0; i < FrameCount; i++) {
             renderTargets[i].Reset();
         }
@@ -259,6 +304,7 @@ namespace Renderer
     bool resizeSwapResources(uint32_t width, uint32_t height)
     {
         // Release swap resources
+        depthStencilTarget.destroy();
         for (uint32_t frameIdx = 0; frameIdx < FrameCount; frameIdx++) {
             renderTargets[frameIdx].Reset();
         }
@@ -273,10 +319,18 @@ namespace Renderer
         }
 
         // Resize depth buffer
-        D3D12_RESOURCE_DESC depthStencilDesc = CD3DX12_RESOURCE_DESC::Tex2D(SwapDepthStencilFormat, width, height, 1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
         D3D12_CLEAR_VALUE depthStencilClearValue = CD3DX12_CLEAR_VALUE(SwapDepthStencilFormat, 1.0F, 0x00);
-        D3D12_HEAP_PROPERTIES depthStencilHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-        if (FAILED(device->CreateCommittedResource(&depthStencilHeap, D3D12_HEAP_FLAG_NONE, &depthStencilDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthStencilClearValue, IID_PPV_ARGS(&depthStencilTarget))))
+        if (!createTexture(
+            depthStencilTarget,
+            D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            SwapDepthStencilFormat,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE,
+            D3D12_HEAP_TYPE_DEFAULT,
+            width, height, 1,
+            1, 1, 1, 0,
+            &depthStencilClearValue
+        ))
         {
             printf("D3D12 swap depth buffer resize failed\n");
             return false;
@@ -308,7 +362,74 @@ namespace Renderer
         dsvDesc.Texture2D.MipSlice = 0;
 
         CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(dsvHeap->GetCPUDescriptorHandleForHeapStart());
-        device->CreateDepthStencilView(depthStencilTarget.Get(), &dsvDesc, dsvHandle);
+        device->CreateDepthStencilView(depthStencilTarget.handle.Get(), &dsvDesc, dsvHandle);
+
+        return true;
+    }
+
+    bool createBuffer(
+        Buffer& buffer,
+        size_t size,
+        D3D12_RESOURCE_STATES resourceState,
+        D3D12_HEAP_TYPE heap,
+        bool createMapped
+    )
+    {
+        buffer.size = size;
+        buffer.mapped = false;
+        buffer.pData = nullptr;
+
+        D3D12_RESOURCE_DESC bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(size);
+        D3D12_HEAP_PROPERTIES heapProps = CD3DX12_HEAP_PROPERTIES(heap);
+        if (FAILED(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc, resourceState, nullptr, IID_PPV_ARGS(&buffer.handle)))) {
+            return false;
+        }
+
+        if (createMapped) {
+            buffer.map();
+        }
+
+        return true;
+    }
+
+    bool createTexture(
+        Texture& texture,
+        D3D12_RESOURCE_DIMENSION dimension,
+        DXGI_FORMAT format,
+        D3D12_RESOURCE_FLAGS flags,
+        D3D12_RESOURCE_STATES resourceState,
+        D3D12_HEAP_TYPE heap,
+        uint32_t width,
+        uint32_t height,
+        uint32_t depth,
+        uint32_t levels,
+        uint32_t layers,
+        uint32_t samples,
+        uint32_t sampleQuality,
+        D3D12_CLEAR_VALUE* pOptimizedClearValue,
+        D3D12_TEXTURE_LAYOUT initialLayout
+    )
+    {
+        assert(width > 0);
+        assert(height > 0);
+        assert(levels > 0);
+        assert(depth > 0);
+        assert(layers > 0);
+        assert(depth == 1 || layers == 1);
+
+        uint32_t const depthOrLayers = (depth == 1) ? layers : depth;
+
+        texture.format = format;
+        texture.width = width;
+        texture.height = height;
+        texture.depthOrLayers = depthOrLayers;
+        texture.levels = levels;
+
+        D3D12_RESOURCE_DESC textureDesc = CD3DX12_RESOURCE_DESC(dimension, 0U, width, height, static_cast<uint16_t>(depthOrLayers), static_cast<uint16_t>(levels), format, samples, sampleQuality, initialLayout, flags);
+        D3D12_HEAP_PROPERTIES heapProps = CD3DX12_HEAP_PROPERTIES(heap);
+        if (FAILED(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &textureDesc, resourceState, pOptimizedClearValue, IID_PPV_ARGS(&texture.handle)))) {
+            return false;
+        }
 
         return true;
     }
