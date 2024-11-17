@@ -104,7 +104,7 @@ namespace Engine
         alignas(16) glm::mat4 viewproject;
         alignas(16) glm::mat4 model;
         alignas(16) glm::mat4 normal;
-        alignas(16) float specularity;
+        alignas(4)  float specularity;
     };
 
     constexpr char const* WindowTitle = "DX12 Renderer";
@@ -640,7 +640,8 @@ namespace Engine
         int width = 0;
         int height = 0;
         SDL_GetWindowSize(window, &width, &height);
-        if (width == 0 || height == 0) {
+        uint32_t windowFlags = SDL_GetWindowFlags(window);
+        if (width == 0 || height == 0 || (windowFlags & SDL_WINDOW_MINIMIZED) != 0) {
             return;
         }
 
